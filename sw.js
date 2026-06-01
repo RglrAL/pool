@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pool-tournament-v1';
+const CACHE_NAME = 'pool-tournament-v2';
 const ASSETS = [
   '/',
   '/index.html',
@@ -22,8 +22,14 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  // Network-first for CDN resources, cache-first for local
-  if (e.request.url.includes('cdnjs.cloudflare.com') || e.request.url.includes('fonts.googleapis.com') || e.request.url.includes('fonts.gstatic.com')) {
+  const url = e.request.url;
+
+  // NEVER cache the GitHub API or non-GET requests — this data must always be live.
+  // (Caching it was why the 30s refresh did nothing and added players "disappeared".)
+  if (e.request.method !== 'GET' || url.includes('api.github.com')) return;
+
+  // Network-first for CDN resources (keep them fresh, fall back to cache offline)
+  if (url.includes('cdnjs.cloudflare.com') || url.includes('fonts.googleapis.com') || url.includes('fonts.gstatic.com')) {
     e.respondWith(
       fetch(e.request).then(r => {
         const clone = r.clone();
@@ -32,6 +38,7 @@ self.addEventListener('fetch', e => {
       }).catch(() => caches.match(e.request))
     );
   } else {
+    // Cache-first for the local app shell only
     e.respondWith(
       caches.match(e.request).then(r => r || fetch(e.request).then(resp => {
         const clone = resp.clone();
