@@ -61,7 +61,8 @@ button:active{transform:scale(.94)}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/canvas-confetti/1.9.3/confetti.browser.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script type="text/babel" data-type="module">
-const{useState,useEffect,useCallback,useRef,useMemo}=React;
+const{useState,useEffect,useCallback,useRef,useMemo,useContext}=React;
+const VideoCtx=React.createContext(null); // provides playIntro(player) so any avatar can open the intro
 
 const REDUCED=window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -141,6 +142,28 @@ const gist={
     return true;
   }
 };
+
+/* ═══ MEDIA STORAGE — commits files to a public GitHub repo, served via jsDelivr CDN.
+   Needs a token with 'repo' scope. Only URLs go in the gist; binaries never do. ═══ */
+const media={
+  async info(repo,token){
+    const r=await fetch(`https://api.github.com/repos/${repo}`,{headers:{"Authorization":`token ${token}`}});
+    if(r.status===404)throw new Error("Repo not found. Create a public repo and use owner/name.");
+    if(r.status===403||r.status===401)throw new Error("Token can't access repos — make a token with the 'repo' scope.");
+    if(!r.ok)throw new Error(`Repo check failed (${r.status})`);
+    return await r.json();
+  },
+  async upload(repo,token,path,base64,branch){
+    const r=await fetch(`https://api.github.com/repos/${repo}/contents/${path}`,{method:"PUT",
+      headers:{"Authorization":`token ${token}`,"Content-Type":"application/json"},
+      body:JSON.stringify({message:`media: ${path}`,content:base64,branch})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(j.message||`Upload failed (${r.status})`);
+    // Pin the jsDelivr URL to the commit sha so it's immutable + instantly available.
+    return `https://cdn.jsdelivr.net/gh/${repo}@${j.commit.sha}/${path}`;
+  }
+};
+function fileToBase64(file){return new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(String(fr.result).split(",")[1]);fr.onerror=rej;fr.readAsDataURL(file)})}
 
 /* ═══ DATA DEFAULTS & HELPERS ═══ */
 const DEF={tournamentName:"Pool Tournament 2026",days:5,players:[],results:{},schedule:{},dayDates:{},dayLabels:{},matchTimes:{},playoffs:{enabled:false,size:4,seeds:[],matches:{}}};
@@ -350,7 +373,9 @@ const PAL=["#E74C3C","#3498DB","#2ECC71","#9B59B6","#E67E22","#1ABC9C","#F39C12"
 
 /* ═══ COMPONENTS ═══ */
 // Player photo is the primary identity. ring: gold/green/silver/bronze accent. dot: live indicator.
-function Av({p,size=56,ring,dot}){
+function Av({p,size=56,ring,dot,vid,noTap}){
+  const playIntro=useContext(VideoCtx);
+  const tappable=!noTap&&p?.video&&playIntro;
   const bg=PAL[Math.abs(p?.id||0)%PAL.length];
   const ringCol={gold:"#FBBF24",green:"#22C55E",silver:"#CBD5E1",bronze:"#D97706"}[ring];
   const border=ringCol?`3px solid ${ringCol}`:"3px solid rgba(255,255,255,0.14)";
@@ -358,9 +383,11 @@ function Av({p,size=56,ring,dot}){
   const inner=p?.image
     ? <img src={p.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
     : <div style={{width:"100%",height:"100%",background:`radial-gradient(circle at 30% 25%,${bg},${bg}99 70%,${bg}66)`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:Math.round(size*.42),fontFamily:"var(--hd)",textShadow:"0 2px 6px rgba(0,0,0,0.4)"}}>{p?.name?.charAt(0)?.toUpperCase()||"?"}</div>;
-  return<div style={{position:"relative",flexShrink:0,width:size,height:size}}>
+  const badge=Math.max(14,size*0.3);const showBadge=(vid||tappable)&&p?.video;
+  return<div onClick={tappable?(e=>{e.stopPropagation();playIntro(p)}):undefined} style={{position:"relative",flexShrink:0,width:size,height:size,cursor:tappable?"pointer":undefined}}>
     <div style={{width:size,height:size,borderRadius:"50%",overflow:"hidden",border,boxShadow:shadow}}>{inner}</div>
     {dot&&<span style={{position:"absolute",bottom:1,right:1,width:Math.max(10,size*0.2),height:Math.max(10,size*0.2),borderRadius:"50%",background:"#22C55E",border:"2px solid #0B1120",boxShadow:"0 0 8px rgba(34,197,94,0.7)"}}/>}
+    {showBadge&&<span style={{position:"absolute",bottom:-2,right:-2,width:badge,height:badge,borderRadius:"50%",background:"#FBBF24",color:"#0B1120",border:"2px solid #0B1120",display:"flex",alignItems:"center",justifyContent:"center",fontSize:Math.max(8,size*0.16),fontWeight:900}}>▶</span>}
   </div>;
 }
 
@@ -408,6 +435,29 @@ function Flip({trigger,children}){
   return<div style={{display:"inline-block",animation:anim?"avFlip .65s ease":"none"}}>{children}</div>;
 }
 
+// Fullscreen player for a single intro video (with sound).
+function VideoModal({src,poster,name,onClose}){
+  return<div onClick={onClose} style={{position:"fixed",inset:0,zIndex:420,background:"rgba(2,6,15,0.94)",backdropFilter:"blur(8px)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:20,animation:"fadeIn .2s",cursor:"pointer"}}>
+    {name&&<div style={{fontSize:30,fontWeight:900,color:"#F8FAFC",fontFamily:"var(--hd)",letterSpacing:1}}>{name}</div>}
+    <video onClick={e=>e.stopPropagation()} src={src} poster={poster} controls autoPlay playsInline style={{width:"100%",maxWidth:480,maxHeight:"70vh",borderRadius:16,boxShadow:"0 20px 60px rgba(0,0,0,0.6)",background:"#000"}}/>
+    <div style={{fontSize:13,color:"#475569"}}>tap outside to close</div></div>;
+}
+
+// "Tale of the tape" — both players' intros for an upcoming matchup.
+function MatchupReel({p1,p2,onClose}){
+  const clip=p=>p?.video
+    ?<video src={p.video} poster={p.image} muted autoPlay loop playsInline controls style={{width:"100%",borderRadius:14,background:"#000",maxHeight:"32vh",display:"block"}}/>
+    :<div style={{...C,height:130,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:8}}><Av p={p} size={56}/><span style={{fontSize:13,color:"#64748B"}}>No intro yet</span></div>;
+  return<div onClick={onClose} style={{position:"fixed",inset:0,zIndex:420,background:"rgba(2,6,15,0.95)",backdropFilter:"blur(8px)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12,padding:20,animation:"fadeIn .2s",cursor:"pointer"}}>
+    <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:460,display:"flex",flexDirection:"column",gap:10}}>
+      <div style={{display:"flex",alignItems:"center",gap:10}}><Av p={p1} size={42}/><span style={{flex:1,minWidth:0,fontSize:18,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p1?.name}</span></div>
+      {clip(p1)}
+      <div style={{textAlign:"center",fontSize:34,fontWeight:900,color:"#FBBF24",fontFamily:"var(--hd)",margin:"-2px 0"}}>VS</div>
+      {clip(p2)}
+      <div style={{display:"flex",alignItems:"center",gap:10}}><Av p={p2} size={42}/><span style={{flex:1,minWidth:0,fontSize:18,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p2?.name}</span></div></div>
+    <div style={{fontSize:13,color:"#475569",marginTop:4}}>tap outside to close · tap a clip to unmute</div></div>;
+}
+
 // Position change vs the standings before the most recent match was played.
 function RankDelta({delta,size=12}){
   if(!delta)return null;const up=delta>0;
@@ -443,11 +493,13 @@ function ShareModal({data,results,opts,onClose}){
 
 // Fullscreen celebration shown to the admin the moment a result is recorded.
 function ResultReveal({reveal,onClose}){
-  useEffect(()=>{playSound("win");try{navigator.vibrate?.([25,40,25])}catch(e){}const t=setTimeout(onClose,2800);return()=>clearTimeout(t)},[]);
-  const{winner,loser}=reveal;
+  const{winner,loser}=reveal;const hasVid=!!winner?.video;
+  useEffect(()=>{playSound("win");try{navigator.vibrate?.([25,40,25])}catch(e){}const t=setTimeout(onClose,hasVid?7000:2800);return()=>clearTimeout(t)},[]);
   return<div onClick={onClose} style={{position:"fixed",inset:0,zIndex:400,background:"rgba(2,6,15,0.92)",backdropFilter:"blur(10px)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,animation:"fadeIn .2s",cursor:"pointer",padding:20}}>
     <div style={{fontSize:18,fontWeight:800,letterSpacing:6,color:"#FBBF24",fontFamily:"var(--hd)",animation:"rise .4s both",animationDelay:".12s"}}>🏆 WINNER</div>
-    <div style={{margin:"18px 0",animation:"slam .6s cubic-bezier(.2,1.3,.4,1) both"}}><Av p={winner} size={180} ring="gold"/></div>
+    {hasVid
+      ?<div style={{margin:"18px 0",width:260,height:260,borderRadius:"50%",overflow:"hidden",border:"4px solid #FBBF24",boxShadow:"0 0 40px rgba(251,191,36,0.5)",animation:"slam .6s cubic-bezier(.2,1.3,.4,1) both"}}><video src={winner.video} poster={winner.image} autoPlay muted loop playsInline style={{width:"100%",height:"100%",objectFit:"cover"}}/></div>
+      :<div style={{margin:"18px 0",animation:"slam .6s cubic-bezier(.2,1.3,.4,1) both"}}><Av p={winner} size={180} ring="gold" noTap/></div>}
     <div style={{fontSize:50,fontWeight:900,color:"#F8FAFC",fontFamily:"var(--hd)",letterSpacing:1,animation:"rise .4s both",animationDelay:".25s"}}>{winner?.name}</div>
     {loser&&<div style={{fontSize:18,color:"#94A3B8",fontWeight:600,marginTop:8,animation:"rise .4s both",animationDelay:".4s"}}>def. {loser.name}</div>}
     <div style={{fontSize:13,color:"#475569",marginTop:26,animation:"fadeIn .5s both",animationDelay:"1s"}}>tap to dismiss</div></div>;
@@ -578,6 +630,7 @@ function StatCard({label,player,value,sub,onTap}){
 }
 
 function Home({data,players,results,fixtures,gp,onNav,onTap}){
+  const[reel,setReel]=useState(false);
   const table=getTable(players,results);const leader=table[0];
   const totalF=fixtures.length,played=Object.keys(results).length;
   const pct=totalF?Math.round((played/totalF)*100):0;
@@ -613,10 +666,12 @@ function Home({data,players,results,fixtures,gp,onNav,onTap}){
         <div style={{fontSize:13,color:"#22C55E",fontWeight:800,letterSpacing:3,textTransform:"uppercase",marginBottom:18,fontFamily:"var(--hd)",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
           <span style={{width:9,height:9,borderRadius:"50%",background:"#22C55E",animation:"pulse 1.6s infinite",boxShadow:"0 0 10px #22C55E"}}/> Next Match</div>
         <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:12}}>
-          <div style={{textAlign:"center",cursor:"pointer",flex:1,minWidth:0}} onClick={()=>p1&&onTap(p1)}><div style={{display:"flex",justifyContent:"center",animation:"float 3.2s ease-in-out infinite"}}><Av p={p1} size={100}/></div><div style={{fontSize:17,fontWeight:700,color:"#F8FAFC",marginTop:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p1?.name}</div></div>
+          <div style={{textAlign:"center",cursor:"pointer",flex:1,minWidth:0}} onClick={()=>p1&&onTap(p1)}><div style={{display:"flex",justifyContent:"center",animation:"float 3.2s ease-in-out infinite"}}><Av p={p1} size={100} vid/></div><div style={{fontSize:17,fontWeight:700,color:"#F8FAFC",marginTop:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p1?.name}</div></div>
           <div style={{fontSize:30,fontWeight:900,color:"#475569",fontFamily:"var(--hd)",flexShrink:0}}>VS</div>
-          <div style={{textAlign:"center",cursor:"pointer",flex:1,minWidth:0}} onClick={()=>p2&&onTap(p2)}><div style={{display:"flex",justifyContent:"center",animation:"float 3.2s ease-in-out infinite",animationDelay:"1.6s"}}><Av p={p2} size={100}/></div><div style={{fontSize:17,fontWeight:700,color:"#F8FAFC",marginTop:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p2?.name}</div></div></div>
-        {(time||di!==undefined)&&<div style={{textAlign:"center",marginTop:16}}><span style={{display:"inline-flex",alignItems:"center",gap:8,fontSize:15,color:"#CBD5E1",fontWeight:600,background:"rgba(0,0,0,0.25)",padding:"8px 16px",borderRadius:20}}>{time&&<span>⏰ {time}</span>}{time&&di!==undefined&&<span style={{color:"#475569"}}>·</span>}{di!==undefined&&<DH data={data} d={di} size="small"/>}</span></div>}</div>})()}
+          <div style={{textAlign:"center",cursor:"pointer",flex:1,minWidth:0}} onClick={()=>p2&&onTap(p2)}><div style={{display:"flex",justifyContent:"center",animation:"float 3.2s ease-in-out infinite",animationDelay:"1.6s"}}><Av p={p2} size={100} vid/></div><div style={{fontSize:17,fontWeight:700,color:"#F8FAFC",marginTop:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p2?.name}</div></div></div>
+        {(time||di!==undefined)&&<div style={{textAlign:"center",marginTop:16}}><span style={{display:"inline-flex",alignItems:"center",gap:8,fontSize:15,color:"#CBD5E1",fontWeight:600,background:"rgba(0,0,0,0.25)",padding:"8px 16px",borderRadius:20}}>{time&&<span>⏰ {time}</span>}{time&&di!==undefined&&<span style={{color:"#475569"}}>·</span>}{di!==undefined&&<DH data={data} d={di} size="small"/>}</span></div>}
+        {(p1?.video||p2?.video)&&<div style={{textAlign:"center",marginTop:14}}><button onClick={()=>setReel(true)} className="press" style={{background:"linear-gradient(135deg,#FBBF24,#F59E0B)",border:"none",color:"#0B1120",fontSize:15,fontWeight:800,padding:"11px 22px",borderRadius:24,cursor:"pointer",fontFamily:"var(--bd)",boxShadow:"0 4px 14px rgba(251,191,36,0.35)"}}>▶ Watch Intros</button></div>}
+        {reel&&<MatchupReel p1={p1} p2={p2} onClose={()=>setReel(false)}/>}</div>})()}
 
     {totalF>0&&<div style={{...C,padding:"18px 20px"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:15,color:"#94A3B8",marginBottom:10,fontWeight:600}}><span>Tournament Progress</span><span style={{color:"#FBBF24",fontFamily:"var(--hd)",fontSize:20}}><Num value={pct} suffix="%"/></span></div>
       <div style={{height:12,background:"rgba(0,0,0,0.4)",borderRadius:6,overflow:"hidden"}}><div style={{height:"100%",width:`${pct}%`,background:"linear-gradient(90deg,#FBBF24,#F59E0B)",borderRadius:6,transition:"width 0.6s",boxShadow:"0 0 12px rgba(251,191,36,0.5)"}}/></div>
@@ -663,7 +718,7 @@ function LeagueRow({p,i,delta,ring,onTap,total}){
   useEffect(()=>{if(prev.current!==i){setMoved(true);prev.current=i;const t=setTimeout(()=>setMoved(false),900);return()=>clearTimeout(t)}},[i]);
   return<div className="press" onClick={()=>onTap(p)} style={{...C,display:"flex",alignItems:"center",gap:14,padding:"14px 16px",marginBottom:10,cursor:"pointer",borderLeft:`4px solid ${i===0?"#FBBF24":i<3?"#64748B":"transparent"}`,animation:moved?"rankPulse .9s ease":undefined}}>
     <div style={{width:34,textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}><span style={{fontSize:24,fontWeight:900,fontFamily:"var(--hd)",color:i<3?"#CBD5E1":"#475569"}}>{i+1}</span><RankDelta delta={delta} size={11}/></div>
-    <Flip trigger={i}><Av p={p} size={68} ring={ring}/></Flip>
+    <Flip trigger={i}><Av p={p} size={68} ring={ring} vid/></Flip>
     <div style={{flex:1,minWidth:0}}><div style={{fontSize:20,fontWeight:700,color:"#F8FAFC",marginBottom:5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div>
       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:5}}>{i===0&&p.played>0&&<Badge type="leader"/>}{p.cs>=3&&p.st==="W"&&<Badge type="streak"/>}{i===total-1&&total>2&&p.played>0&&<Badge type="spoon"/>}</div>
       <div style={{fontSize:14,color:"#94A3B8",fontWeight:500}}>Played {p.played} · Won {p.wins} · Lost {p.losses}</div><Dots form={p.form} size={11}/></div>
@@ -817,18 +872,23 @@ function Profile({player,players,results,fixtures,onClose,gp,data,onTap}){const 
   const e=table.find(p=>p.id===player.id)||{...player,played:0,wins:0,losses:0,pts:0,form:[],fw:0,fl:0,streak:0};
   const pos=table.findIndex(p=>p.id===player.id)+1;const pr=playerResults(player.id,results);
   const rem=fixtures.filter(f=>(f.p1===player.id||f.p2===player.id)&&!results[f.id]);
+  const[showVid,setShowVid]=useState(false);
   return<div style={{position:"fixed",inset:0,background:"#0B1120",zIndex:100,overflowY:"auto",animation:"slideUp 0.3s"}}><div style={{maxWidth:680,margin:"0 auto"}}>
     <div style={{position:"relative",overflow:"hidden"}}>
-      {player.image&&<div style={{position:"absolute",inset:0,backgroundImage:`url(${player.image})`,backgroundSize:"cover",backgroundPosition:"center top",filter:"blur(38px) saturate(1.3)",transform:"scale(1.4)",opacity:0.5}}/>}
-      <div style={{position:"absolute",inset:0,background:player.image?"linear-gradient(180deg,rgba(11,17,32,0.45) 0%,rgba(11,17,32,0.82) 68%,#0B1120 100%)":"linear-gradient(180deg,rgba(251,191,36,0.12) 0%,transparent 60%)"}}/>
+      {player.video
+        ?<video src={player.video} poster={player.image} autoPlay muted loop playsInline style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",filter:"blur(2px) saturate(1.15)",opacity:0.55}}/>
+        :player.image&&<div style={{position:"absolute",inset:0,backgroundImage:`url(${player.image})`,backgroundSize:"cover",backgroundPosition:"center top",filter:"blur(38px) saturate(1.3)",transform:"scale(1.4)",opacity:0.5}}/>}
+      <div style={{position:"absolute",inset:0,background:(player.image||player.video)?"linear-gradient(180deg,rgba(11,17,32,0.45) 0%,rgba(11,17,32,0.82) 68%,#0B1120 100%)":"linear-gradient(180deg,rgba(251,191,36,0.12) 0%,transparent 60%)"}}/>
       <div style={{position:"relative",padding:"20px 20px 26px"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18,gap:10}}>
           <button onClick={onClose} style={{background:"rgba(255,255,255,0.12)",border:"none",color:"#E2E8F0",fontSize:16,padding:"12px 20px",borderRadius:12,cursor:"pointer",fontWeight:600,fontFamily:"var(--bd)",minHeight:48,backdropFilter:"blur(6px)"}}>← Back</button>
           {data&&e.played>0&&<ShareBtn data={data} results={results} opts={{mode:"player",player}} label="📸 Share Card"/>}</div>
         <div style={{textAlign:"center"}}><div style={{display:"flex",justifyContent:"center",animation:"popIn .4s"}}><Av p={player} size={162} ring={pos===1&&e.played>0?"gold":undefined}/></div>
           <h2 style={{fontSize:42,fontWeight:900,color:"#F8FAFC",margin:"16px 0 10px",fontFamily:"var(--hd)",letterSpacing:1,textShadow:"0 2px 18px rgba(0,0,0,0.6)"}}>{player.name}</h2>
-          <div style={{display:"flex",justifyContent:"center",gap:8,flexWrap:"wrap"}}>{pos===1&&e.played>0&&<Badge type="leader"/>}{e.streak>=3&&<Badge type="streak"/>}</div></div>
+          <div style={{display:"flex",justifyContent:"center",gap:8,flexWrap:"wrap"}}>{pos===1&&e.played>0&&<Badge type="leader"/>}{e.streak>=3&&<Badge type="streak"/>}</div>
+          {player.video&&<button onClick={()=>setShowVid(true)} className="press" style={{marginTop:14,background:"rgba(255,255,255,0.12)",border:"1px solid rgba(255,255,255,0.2)",color:"#fff",fontSize:15,fontWeight:700,padding:"10px 20px",borderRadius:24,cursor:"pointer",fontFamily:"var(--bd)",backdropFilter:"blur(6px)"}}>▶ Play Intro</button>}</div>
       </div></div>
+    {showVid&&<VideoModal src={player.video} poster={player.image} name={player.name} onClose={()=>setShowVid(false)}/>}
     <div style={{padding:"18px 20px 0"}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
         {[["Position",pos>0?`#${pos}`:"-"],["Points",e.pts],["Played",e.played]].map(([l,v])=><div key={l} style={{...C,textAlign:"center",padding:14}}>
@@ -885,8 +945,8 @@ function StatsScreen({players,results,onTap}){
 }
 
 /* ═══ ADMIN ═══ */
-function PlayerAdminRow({p,index,total,onRename,onImg,onRemove,onMove}){
-  const[editing,setEditing]=useState(false);const[name,setName]=useState(p.name);const fileRef=useRef(null);
+function PlayerAdminRow({p,index,total,onRename,onImg,onRemove,onMove,onVideo,onVideoRemove,uploading}){
+  const[editing,setEditing]=useState(false);const[name,setName]=useState(p.name);const fileRef=useRef(null);const vidRef=useRef(null);
   useEffect(()=>{setName(p.name)},[p.name]);
   const commit=()=>{const n=name.trim();if(n&&n!==p.name)onRename(n);else setName(p.name);setEditing(false)};
   const mv={background:"rgba(255,255,255,0.07)",border:"none",borderRadius:8,color:"#94A3B8",width:32,height:24,fontSize:12,cursor:"pointer",lineHeight:1,padding:0};
@@ -895,17 +955,32 @@ function PlayerAdminRow({p,index,total,onRename,onImg,onRemove,onMove}){
       <button onClick={()=>onMove(-1)} disabled={index===0} style={{...mv,opacity:index===0?.3:1}}>▲</button>
       <button onClick={()=>onMove(1)} disabled={index===total-1} style={{...mv,opacity:index===total-1?.3:1}}>▼</button></div>
     <button onClick={()=>fileRef.current?.click()} style={{padding:0,border:"none",background:"none",cursor:"pointer",position:"relative",flexShrink:0}}>
-      <Av p={p} size={52}/>
+      <Av p={p} size={52} noTap/>
       <span style={{position:"absolute",bottom:-3,right:-3,fontSize:11,background:"#0B1120",borderRadius:"50%",width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid rgba(255,255,255,0.18)"}}>📷</span></button>
     <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={onImg}/>
     {editing
       ? <input autoFocus value={name} onChange={e=>setName(e.target.value)} onBlur={commit} onKeyDown={e=>{if(e.key==="Enter")commit();if(e.key==="Escape"){setName(p.name);setEditing(false)}}} style={{...inp,flex:1,fontSize:17,padding:"10px 12px",minWidth:0}}/>
       : <span onClick={()=>setEditing(true)} style={{flex:1,minWidth:0,fontSize:18,fontWeight:600,color:"#F8FAFC",cursor:"text",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name} <span style={{fontSize:13,color:"#475569"}}>✎</span></span>}
+    <button onClick={()=>p.video?onVideoRemove():vidRef.current?.click()} disabled={uploading} title={p.video?"Remove intro video":"Upload intro video"} style={{...btnS,fontSize:16,minWidth:44,minHeight:44,flexShrink:0,background:p.video?"rgba(34,197,94,0.15)":"rgba(255,255,255,0.06)",color:p.video?"#22C55E":"#94A3B8"}}>{uploading?"⏳":p.video?"🎬✓":"🎬"}</button>
+    <input ref={vidRef} type="file" accept="video/mp4,video/*" style={{display:"none"}} onChange={onVideo}/>
     <button onClick={onRemove} style={{...btnS,color:"#EF4444",background:"rgba(239,68,68,0.12)",fontSize:18,minWidth:44,minHeight:44,flexShrink:0}}>✕</button></div>;
 }
 
 function AdminScreen({data,save,isAdmin,gistId,onResult}){
   const[view,setView]=useState("main");const[nn,setNn]=useState("");const[tn,setTn]=useState(data.tournamentName);const logoRef=useRef(null);const[startDate,setStartDate]=useState("");
+  const[uploading,setUploading]=useState(null);const[repoInput,setRepoInput]=useState(data.mediaRepo||"");const[repoStatus,setRepoStatus]=useState("");
+  const handleVideo=async(pid,e)=>{const file=e.target.files[0];if(!file)return;e.target.value="";
+    const repo=data.mediaRepo,token=localStorage.getItem(TOKEN_KEY);
+    if(!repo){alert("Set your media repo in Settings → Player Videos first.");return}
+    if(!token){alert("Admin token missing — log in as admin.");return}
+    if(file.size>20*1024*1024){alert("That clip is over 20MB. jsDelivr won't serve files that big — please use a shorter/compressed mp4.");return}
+    setUploading(pid);
+    try{const inf=await media.info(repo,token);const b64=await fileToBase64(file);const url=await media.upload(repo,token,`videos/${pid}-${Date.now()}.mp4`,b64,inf.default_branch);
+      save({...data,players:data.players.map(p=>p.id===pid?{...p,video:url}:p)});}
+    catch(err){alert("Upload failed: "+err.message)}
+    setUploading(null);};
+  const removeVideo=pid=>save({...data,players:data.players.map(p=>p.id===pid?{...p,video:null}:p)});
+  const connectRepo=async()=>{const repo=repoInput.trim().replace(/^https?:\/\/github\.com\//,"").replace(/\/$/,"");const token=localStorage.getItem(TOKEN_KEY);if(!repo){setRepoStatus("Enter owner/repo");return}setRepoStatus("Checking…");try{const inf=await media.info(repo,token);save({...data,mediaRepo:repo});setRepoStatus(`✓ Connected · branch ${inf.default_branch}${inf.private?" · ⚠ repo is private (videos won't load for players — make it public)":""}`)}catch(e){setRepoStatus("✗ "+e.message)}};
   const setAllDates=()=>{if(!startDate)return;const dd={...data.dayDates};const base=new Date(startDate+"T12:00:00");for(let d=0;d<data.days;d++){const dt=new Date(base);dt.setDate(base.getDate()+d);dd[d]=`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;}save({...data,dayDates:dd})};
   const shareUrl=`${location.origin}${location.pathname}?gist=${gistId}`;
 
@@ -956,7 +1031,8 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
       <div style={{display:"flex",gap:10,marginBottom:16}}><input value={nn} onChange={e=>setNn(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addP()} placeholder="Player name..." style={{...inp,flex:1,fontSize:17,padding:"14px 18px"}}/>
         <Btn onClick={addP} style={{width:"auto",padding:"14px 24px"}}>+ Add</Btn></div>
       {data.players.length>0&&<p style={{fontSize:13,color:"#64748B",marginBottom:14,lineHeight:1.5}}>Tap a name to rename · tap the photo to upload · use ▲▼ to reorder.</p>}
-      {data.players.map((p,i)=><PlayerAdminRow key={p.id} p={p} index={i} total={data.players.length} onRename={n=>renameP(p.id,n)} onImg={e=>handleImg(p.id,e)} onRemove={()=>remP(p.id)} onMove={dir=>moveP(p.id,dir)}/>)}</div>}
+      {data.players.length>0&&<p style={{fontSize:12,color:"#64748B",marginBottom:12}}>🎬 = upload a short intro video {data.mediaRepo?"":"(set up the media repo in Settings first)"}.</p>}
+      {data.players.map((p,i)=><PlayerAdminRow key={p.id} p={p} index={i} total={data.players.length} onRename={n=>renameP(p.id,n)} onImg={e=>handleImg(p.id,e)} onRemove={()=>remP(p.id)} onMove={dir=>moveP(p.id,dir)} onVideo={e=>handleVideo(p.id,e)} onVideoRemove={()=>removeVideo(p.id)} uploading={uploading===p.id}/>)}</div>}
 
     {view==="dates"&&<div><h2 style={HS}>Set Dates</h2><p style={{fontSize:15,color:"#94A3B8",marginBottom:16,lineHeight:1.5}}>Set the date for each day. Shows throughout the app.</p>
       <div style={{...C,padding:18,marginBottom:18,background:"rgba(34,197,94,0.06)",border:"1px solid rgba(34,197,94,0.18)"}}>
@@ -1027,6 +1103,13 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
           <Btn onClick={()=>logoRef.current?.click()} style={{flex:1,padding:"14px"}}>{data.logo?"Change Logo":"Upload Logo"}</Btn>
           {data.logo&&<button onClick={()=>save({...data,logo:null})} style={{...btnS,color:"#EF4444",background:"rgba(239,68,68,0.12)",fontSize:18,minWidth:48,minHeight:48}}>✕</button>}</div>
         <input ref={logoRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleLogo}/></div>
+      <div style={{...C,padding:20,marginBottom:14}}><label style={{fontSize:14,color:"#94A3B8",fontWeight:600,display:"block",marginBottom:8}}>🎬 Player Videos — Media Repo</label>
+        <p style={{fontSize:13,color:"#64748B",marginBottom:10,lineHeight:1.5}}>Intro videos are committed to a <strong style={{color:"#94A3B8"}}>public</strong> GitHub repo and served via the jsDelivr CDN. Create a public repo (e.g. <code style={{color:"#FBBF24"}}>you/pool-media</code>) and make sure your admin token has the <strong style={{color:"#94A3B8"}}>repo</strong> scope.</p>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          <input value={repoInput} onChange={e=>setRepoInput(e.target.value)} placeholder="owner/repo" style={{...inp,fontSize:16,padding:"14px 16px",flex:1,minWidth:160,minHeight:52}}/>
+          <Btn onClick={connectRepo} style={{width:"auto",padding:"14px 22px"}}>Connect</Btn></div>
+        {repoStatus&&<div style={{fontSize:13,color:repoStatus[0]==="✓"?"#22C55E":repoStatus[0]==="✗"?"#EF4444":"#94A3B8",marginTop:10,fontWeight:600}}>{repoStatus}</div>}
+        {data.mediaRepo&&!repoStatus&&<div style={{fontSize:13,color:"#22C55E",marginTop:10,fontWeight:600}}>✓ Using {data.mediaRepo}</div>}</div>
       <div style={{...C,padding:20,marginBottom:14}}><label style={{fontSize:14,color:"#94A3B8",fontWeight:600,display:"block",marginBottom:8}}>Number of Days</label>
         <input type="number" min={1} max={14} value={data.days} onChange={e=>save({...data,days:parseInt(e.target.value)||1})} style={{...inp,fontSize:20,padding:"14px 18px",width:100,textAlign:"center"}}/></div>
       <div style={{...C,padding:20,border:"1px solid rgba(239,68,68,0.2)"}}><p style={{fontSize:15,color:"#94A3B8",marginBottom:14}}>Deletes everything.</p>
@@ -1048,7 +1131,7 @@ function ResEntry({f,p1,p2,result,onRec,onClr}){
   return<div style={{...C,marginBottom:12,padding:"16px 18px"}}>
     <div style={{fontSize:13,color:"#64748B",fontWeight:600,marginBottom:12,textAlign:"center"}}>Who won?</div>
     <div style={{display:"flex",gap:10}}>
-      {[p1,p2].map(p=><button key={p.id} onClick={()=>{navigator.vibrate?.(20);onRec(p.id)}} style={{flex:1,padding:"14px 10px",borderRadius:14,border:"1px solid rgba(34,197,94,0.25)",fontSize:16,fontWeight:800,background:"rgba(34,197,94,0.12)",color:"#22C55E",cursor:"pointer",fontFamily:"var(--bd)",minHeight:64,display:"flex",flexDirection:"column",alignItems:"center",gap:8}}><Av p={p} size={56}/><span style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:"100%"}}>{p.name}</span></button>)}</div></div>;}
+      {[p1,p2].map(p=><button key={p.id} onClick={()=>{navigator.vibrate?.(20);onRec(p.id)}} style={{flex:1,padding:"14px 10px",borderRadius:14,border:"1px solid rgba(34,197,94,0.25)",fontSize:16,fontWeight:800,background:"rgba(34,197,94,0.12)",color:"#22C55E",cursor:"pointer",fontFamily:"var(--bd)",minHeight:64,display:"flex",flexDirection:"column",alignItems:"center",gap:8}}><Av p={p} size={56} noTap/><span style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:"100%"}}>{p.name}</span></button>)}</div></div>;}
 
 /* ═══════════ MAIN APP ═══════════ */
 function App(){
@@ -1070,6 +1153,7 @@ function App(){
   const[toast,setToast]=useState(null);
   const toastTimer=useRef(null);
   const[reveal,setReveal]=useState(null);
+  const[intro,setIntro]=useState(null);
   const[sound,setSound]=useState(window.__poolSound);
   const toggleSound=()=>{const v=!window.__poolSound;window.__poolSound=v;localStorage.setItem("pool-sound",v?"1":"0");setSound(v);if(v){try{_actx().resume&&_actx().resume();playSound("win")}catch(e){}}};
   useEffect(()=>{dataRef.current=data},[data]);
@@ -1148,7 +1232,7 @@ function App(){
     ...(data.playoffs?.enabled?[{id:"bracket",i:"🥊",l:"Playoffs"}]:[]),{id:"stats",i:"📊",l:"Stats"},
     ...(isAdmin?[{id:"admin",i:"⚙️",l:"Admin"}]:[])];
 
-  return<div>
+  return<VideoCtx.Provider value={setIntro}><div>
     <div style={{padding:"20px 20px 14px",background:"linear-gradient(180deg,rgba(251,191,36,0.1) 0%,transparent 100%)",borderBottom:"1px solid rgba(255,255,255,0.06)",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:40,backdropFilter:"blur(12px)"}}>
       {data.logo?<img src={data.logo} alt="" style={{width:40,height:40,objectFit:"contain",flexShrink:0}}/>:<span style={{fontSize:34}}>🎱</span>}<h1 style={{fontSize:28,fontWeight:400,color:"#FBBF24",fontFamily:"var(--hd)",letterSpacing:1.5,flex:1,lineHeight:1.05,textShadow:"0 2px 12px rgba(251,191,36,0.25)"}}>{data.tournamentName}</h1>
       <button className="press" onClick={toggleSound} title={sound?"Sound on":"Sound off"} style={{background:"rgba(255,255,255,0.06)",border:"none",borderRadius:12,width:44,height:44,fontSize:20,cursor:"pointer",color:sound?"#FBBF24":"#475569",flexShrink:0}}>{sound?"🔊":"🔇"}</button></div>
@@ -1172,7 +1256,8 @@ function App(){
 
     {pp&&<Profile player={pp} players={data.players} results={data.results} fixtures={fixtures} onClose={()=>setPp(null)} gp={gp} data={data} onTap={setPp}/>}
     {reveal&&<ResultReveal reveal={reveal} onClose={()=>setReveal(null)}/>}
-  </div>;
+    {intro&&<VideoModal src={intro.video} poster={intro.image} name={intro.name} onClose={()=>setIntro(null)}/>}
+  </div></VideoCtx.Provider>;
 }
 
 const C={background:"linear-gradient(180deg,rgba(255,255,255,0.055),rgba(255,255,255,0.02))",borderRadius:20,padding:"18px 20px",border:"1px solid rgba(255,255,255,0.08)",boxShadow:"0 8px 30px rgba(0,0,0,0.35)",backdropFilter:"blur(6px)"};
