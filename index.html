@@ -37,6 +37,8 @@ input[type="date"]{color-scheme:dark}
 @keyframes avFlip{0%{transform:perspective(420px) rotateY(0)}50%{transform:perspective(420px) rotateY(90deg)}100%{transform:perspective(420px) rotateY(0)}}
 @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
 @keyframes rankPulse{0%{box-shadow:0 0 0 0 rgba(251,191,36,0)}25%{box-shadow:0 0 0 2px rgba(251,191,36,0.55),0 0 26px rgba(251,191,36,0.35)}100%{box-shadow:0 0 0 0 rgba(251,191,36,0)}}
+@keyframes slideInL{0%{transform:translateX(-70px);opacity:0}100%{transform:translateX(0);opacity:1}}
+@keyframes slideInR{0%{transform:translateX(70px);opacity:0}100%{transform:translateX(0);opacity:1}}
 .bkt-col:not(:last-child) .bkt-cell::after{content:"";position:absolute;right:-30px;top:50%;width:30px;height:2px;background:rgba(255,255,255,0.14)}
 .bkt-col:not(:first-child) .bkt-cell::before{content:"";position:absolute;left:-15px;top:50%;width:15px;height:2px;background:rgba(255,255,255,0.14)}
 ::-webkit-scrollbar{display:none}
@@ -63,6 +65,7 @@ button:active{transform:scale(.94)}
 <script type="text/babel" data-type="module">
 const{useState,useEffect,useCallback,useRef,useMemo,useContext}=React;
 const VideoCtx=React.createContext(null); // provides playIntro(player) so any avatar can open the intro
+function Portal({children}){return ReactDOM.createPortal(children,document.body);} // escape transformed/overflow ancestors
 
 const REDUCED=window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -164,6 +167,19 @@ const media={
   }
 };
 function fileToBase64(file){return new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(String(fr.result).split(",")[1]);fr.onerror=rej;fr.readAsDataURL(file)})}
+
+/* ═══ CLOUDINARY — unsigned in-app upload (preset is safe in the client) ═══ */
+async function cldUpload(cloud,preset,file,kind){
+  const fd=new FormData();fd.append("file",file);fd.append("upload_preset",preset);
+  const r=await fetch(`https://api.cloudinary.com/v1_1/${cloud}/${kind}/upload`,{method:"POST",body:fd});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(j.error?.message||`Cloudinary upload failed (${r.status})`);
+  return j.secure_url;
+}
+// Auto-inject f_auto,q_auto right after /upload/ for optimised delivery (idempotent, Cloudinary-only).
+function cldOpt(url){if(!url||!/res\.cloudinary\.com/.test(url))return url;if(/\/upload\/[^/]*(?:f_auto|q_auto)/.test(url))return url;return url.replace("/upload/","/upload/f_auto,q_auto/")}
+// Derive a still-frame poster from a Cloudinary video when a player has no separate photo.
+function vidPoster(p){if(p?.image)return p.image;const v=p?.video||"";if(!/res\.cloudinary\.com\/[^/]+\/video\/upload\//.test(v))return undefined;return v.replace("/video/upload/","/video/upload/so_0/").replace(/\.[a-z0-9]+(\?.*)?$/i,".jpg")}
 
 /* ═══ DATA DEFAULTS & HELPERS ═══ */
 const DEF={tournamentName:"Pool Tournament 2026",days:5,players:[],results:{},schedule:{},dayDates:{},dayLabels:{},matchTimes:{},playoffs:{enabled:false,size:4,seeds:[],matches:{}}};
@@ -435,27 +451,34 @@ function Flip({trigger,children}){
   return<div style={{display:"inline-block",animation:anim?"avFlip .65s ease":"none"}}>{children}</div>;
 }
 
-// Fullscreen player for a single intro video (with sound).
+// Fullscreen player for a single intro — clean, big, no controls (like the profile portrait).
 function VideoModal({src,poster,name,onClose}){
-  return<div onClick={onClose} style={{position:"fixed",inset:0,zIndex:420,background:"rgba(2,6,15,0.94)",backdropFilter:"blur(8px)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:20,animation:"fadeIn .2s",cursor:"pointer"}}>
-    {name&&<div style={{fontSize:30,fontWeight:900,color:"#F8FAFC",fontFamily:"var(--hd)",letterSpacing:1}}>{name}</div>}
-    <video onClick={e=>e.stopPropagation()} src={src} poster={poster} controls autoPlay playsInline style={{width:"100%",maxWidth:480,maxHeight:"70vh",borderRadius:16,boxShadow:"0 20px 60px rgba(0,0,0,0.6)",background:"#000"}}/>
-    <div style={{fontSize:13,color:"#475569"}}>tap outside to close</div></div>;
+  return<Portal><div onClick={onClose} style={{position:"fixed",inset:0,zIndex:5000,background:"rgba(2,6,15,0.96)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:18,animation:"fadeIn .2s",cursor:"pointer"}}>
+    {name&&<div style={{fontSize:34,fontWeight:900,color:"#F8FAFC",fontFamily:"var(--hd)",letterSpacing:1}}>{name}</div>}
+    <video onClick={e=>{e.stopPropagation();const v=e.currentTarget;v.paused?v.play():v.pause()}} src={src} poster={poster} autoPlay playsInline style={{width:"100%",maxWidth:560,maxHeight:"78vh",borderRadius:20,boxShadow:"0 24px 70px rgba(0,0,0,0.7)",background:"#000",objectFit:"contain"}}/>
+    <button onClick={onClose} style={{position:"fixed",top:16,right:16,width:48,height:48,borderRadius:"50%",border:"none",background:"rgba(255,255,255,0.14)",color:"#fff",fontSize:22,cursor:"pointer",backdropFilter:"blur(6px)"}}>✕</button></div></Portal>;
 }
 
-// "Tale of the tape" — both players' intros for an upcoming matchup.
+// "Tale of the tape" — plays each player's intro in turn with an animated VS between them.
 function MatchupReel({p1,p2,onClose}){
-  const clip=p=>p?.video
-    ?<video src={p.video} poster={p.image} muted autoPlay loop playsInline controls style={{width:"100%",borderRadius:14,background:"#000",maxHeight:"32vh",display:"block"}}/>
-    :<div style={{...C,height:130,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:8}}><Av p={p} size={56}/><span style={{fontSize:13,color:"#64748B"}}>No intro yet</span></div>;
-  return<div onClick={onClose} style={{position:"fixed",inset:0,zIndex:420,background:"rgba(2,6,15,0.95)",backdropFilter:"blur(8px)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12,padding:20,animation:"fadeIn .2s",cursor:"pointer"}}>
-    <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:460,display:"flex",flexDirection:"column",gap:10}}>
-      <div style={{display:"flex",alignItems:"center",gap:10}}><Av p={p1} size={42}/><span style={{flex:1,minWidth:0,fontSize:18,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p1?.name}</span></div>
-      {clip(p1)}
-      <div style={{textAlign:"center",fontSize:34,fontWeight:900,color:"#FBBF24",fontFamily:"var(--hd)",margin:"-2px 0"}}>VS</div>
-      {clip(p2)}
-      <div style={{display:"flex",alignItems:"center",gap:10}}><Av p={p2} size={42}/><span style={{flex:1,minWidth:0,fontSize:18,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p2?.name}</span></div></div>
-    <div style={{fontSize:13,color:"#475569",marginTop:4}}>tap outside to close · tap a clip to unmute</div></div>;
+  const steps=useMemo(()=>{const s=[];if(p1?.video)s.push({t:"clip",p:p1});if(p1?.video&&p2?.video)s.push({t:"vs"});if(p2?.video)s.push({t:"clip",p:p2});s.push({t:"end"});return s;},[p1,p2]);
+  const[i,setI]=useState(0);const step=steps[i]||{t:"end"};
+  const next=()=>setI(v=>Math.min(v+1,steps.length-1));
+  useEffect(()=>{if(step.t==="vs"){const t=setTimeout(next,1600);return()=>clearTimeout(t)}},[i]);
+  const nameTag=p=><div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}><Av p={p} size={48} ring="gold" noTap/><span style={{fontSize:24,fontWeight:900,color:"#F8FAFC",fontFamily:"var(--hd)",letterSpacing:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p?.name}</span></div>;
+  return<Portal><div onClick={onClose} style={{position:"fixed",inset:0,zIndex:5000,background:"rgba(2,6,15,0.97)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,padding:18,animation:"fadeIn .2s",cursor:"pointer",overflow:"hidden"}}>
+    {step.t==="clip"&&<div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:560,display:"flex",flexDirection:"column",alignItems:"center",animation:"popIn .35s"}}>
+      {nameTag(step.p)}
+      <video key={step.p.id} onClick={e=>{e.stopPropagation();const v=e.currentTarget;v.paused?v.play():v.pause()}} src={step.p.video} poster={vidPoster(step.p)} autoPlay playsInline onEnded={next} style={{width:"100%",maxHeight:"66vh",borderRadius:20,boxShadow:"0 24px 70px rgba(0,0,0,0.7)",background:"#000",objectFit:"contain",display:"block"}}/>
+      <button onClick={next} style={{marginTop:16,background:"rgba(255,255,255,0.12)",border:"none",color:"#fff",fontSize:15,fontWeight:700,padding:"10px 22px",borderRadius:24,cursor:"pointer",fontFamily:"var(--bd)"}}>Skip ▶</button></div>}
+    {step.t==="vs"&&<div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+      <div style={{animation:"slideInL .5s both"}}><Av p={p1} size={120} ring="gold" noTap/></div>
+      <div style={{fontSize:96,fontWeight:900,color:"#FBBF24",fontFamily:"var(--hd)",textShadow:"0 0 40px rgba(251,191,36,0.6)",animation:"slam .6s cubic-bezier(.2,1.4,.4,1) both",margin:"0 -6px"}}>VS</div>
+      <div style={{animation:"slideInR .5s both"}}><Av p={p2} size={120} ring="gold" noTap/></div></div>}
+    {step.t==="end"&&<div onClick={e=>e.stopPropagation()} style={{textAlign:"center",animation:"popIn .35s"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:14,marginBottom:20}}><Av p={p1} size={100} ring="gold" noTap/><span style={{fontSize:44,fontWeight:900,color:"#FBBF24",fontFamily:"var(--hd)"}}>VS</span><Av p={p2} size={100} ring="gold" noTap/></div>
+      <div style={{display:"flex",gap:12,justifyContent:"center"}}><Btn onClick={()=>setI(0)} bg="rgba(255,255,255,0.1)" color="#fff" style={{width:"auto",padding:"14px 24px"}}>↻ Replay</Btn><Btn onClick={onClose} style={{width:"auto",padding:"14px 28px"}}>Done</Btn></div></div>}
+    <button onClick={onClose} style={{position:"fixed",top:16,right:16,width:48,height:48,borderRadius:"50%",border:"none",background:"rgba(255,255,255,0.14)",color:"#fff",fontSize:22,cursor:"pointer",backdropFilter:"blur(6px)"}}>✕</button></div></Portal>;
 }
 
 // Position change vs the standings before the most recent match was played.
@@ -498,7 +521,7 @@ function ResultReveal({reveal,onClose}){
   return<div onClick={onClose} style={{position:"fixed",inset:0,zIndex:400,background:"rgba(2,6,15,0.92)",backdropFilter:"blur(10px)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,animation:"fadeIn .2s",cursor:"pointer",padding:20}}>
     <div style={{fontSize:18,fontWeight:800,letterSpacing:6,color:"#FBBF24",fontFamily:"var(--hd)",animation:"rise .4s both",animationDelay:".12s"}}>🏆 WINNER</div>
     {hasVid
-      ?<div style={{margin:"18px 0",width:260,height:260,borderRadius:"50%",overflow:"hidden",border:"4px solid #FBBF24",boxShadow:"0 0 40px rgba(251,191,36,0.5)",animation:"slam .6s cubic-bezier(.2,1.3,.4,1) both"}}><video src={winner.video} poster={winner.image} autoPlay muted loop playsInline style={{width:"100%",height:"100%",objectFit:"cover"}}/></div>
+      ?<div style={{margin:"18px 0",width:260,height:260,borderRadius:"50%",overflow:"hidden",border:"4px solid #FBBF24",boxShadow:"0 0 40px rgba(251,191,36,0.5)",animation:"slam .6s cubic-bezier(.2,1.3,.4,1) both"}}><video src={winner.video} poster={vidPoster(winner)} autoPlay muted loop playsInline style={{width:"100%",height:"100%",objectFit:"cover"}}/></div>
       :<div style={{margin:"18px 0",animation:"slam .6s cubic-bezier(.2,1.3,.4,1) both"}}><Av p={winner} size={180} ring="gold" noTap/></div>}
     <div style={{fontSize:50,fontWeight:900,color:"#F8FAFC",fontFamily:"var(--hd)",letterSpacing:1,animation:"rise .4s both",animationDelay:".25s"}}>{winner?.name}</div>
     {loser&&<div style={{fontSize:18,color:"#94A3B8",fontWeight:600,marginTop:8,animation:"rise .4s both",animationDelay:".4s"}}>def. {loser.name}</div>}
@@ -738,13 +761,16 @@ function TableScreen({players,results,onTap,data}){const table=getTable(players,
 
 function FixtureCard({f,data,gp,results,onTap}){
   const p1=gp(f.p1),p2=gp(f.p2),r=results[f.id],time=data.matchTimes?.[f.id];const w1=r?.winnerId===p1?.id,w2=r?.winnerId===p2?.id;
+  const[reel,setReel]=useState(false);const hasVid=p1?.video||p2?.video;
   return<div style={{...C,marginBottom:10,padding:"14px 16px"}}>
-    <div style={{display:"flex",justifyContent:"space-between",marginBottom:10,fontSize:13,fontWeight:600}}><span style={{color:"#64748B"}}>{time||"TBD"}</span>
-      {r?<span style={{color:"#22C55E",fontWeight:700}}>✓ Complete</span>:<span style={{color:"#FBBF24",fontWeight:700}}>⏳ Upcoming</span>}</div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,fontSize:13,fontWeight:600}}><span style={{color:"#64748B"}}>{time||"TBD"}</span>
+      <div style={{display:"flex",alignItems:"center",gap:10}}>{hasVid&&<button onClick={()=>setReel(true)} style={{background:"rgba(251,191,36,0.15)",border:"1px solid rgba(251,191,36,0.3)",color:"#FBBF24",fontSize:12,fontWeight:800,padding:"5px 12px",borderRadius:20,cursor:"pointer",fontFamily:"var(--bd)"}}>▶ Intros</button>}
+      {r?<span style={{color:"#22C55E",fontWeight:700}}>✓ Complete</span>:<span style={{color:"#FBBF24",fontWeight:700}}>⏳ Upcoming</span>}</div></div>
     <div style={{display:"flex",alignItems:"center",gap:10}}>
       <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:10,cursor:"pointer"}} onClick={()=>p1&&onTap(p1)}><Flip trigger={r?r.winnerId:"_"}><Av p={p1} size={62} ring={w1?"green":undefined}/></Flip><span style={{fontSize:17,fontWeight:w1?800:500,color:w1?"#22C55E":"#E2E8F0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p1?.name}{w1&&" 🏆"}</span></div>
       <Score r={r} vsStyle={{fontSize:18,fontWeight:800,color:"#334155",padding:"0 10px",flexShrink:0}} vsText="VS"/>
-      <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:10,justifyContent:"flex-end",cursor:"pointer"}} onClick={()=>p2&&onTap(p2)}><span style={{fontSize:17,fontWeight:w2?800:500,color:w2?"#22C55E":"#E2E8F0",textAlign:"right",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{w2&&"🏆 "}{p2?.name}</span><Flip trigger={r?r.winnerId:"_"}><Av p={p2} size={62} ring={w2?"green":undefined}/></Flip></div></div></div>;
+      <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:10,justifyContent:"flex-end",cursor:"pointer"}} onClick={()=>p2&&onTap(p2)}><span style={{fontSize:17,fontWeight:w2?800:500,color:w2?"#22C55E":"#E2E8F0",textAlign:"right",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{w2&&"🏆 "}{p2?.name}</span><Flip trigger={r?r.winnerId:"_"}><Av p={p2} size={62} ring={w2?"green":undefined}/></Flip></div></div>
+    {reel&&<MatchupReel p1={p1} p2={p2} onClose={()=>setReel(false)}/>}</div>;
 }
 
 // Fixtures, grouped by day (replaces the old separate Schedule page).
@@ -876,7 +902,7 @@ function Profile({player,players,results,fixtures,onClose,gp,data,onTap}){const 
   return<div style={{position:"fixed",inset:0,background:"#0B1120",zIndex:100,overflowY:"auto",animation:"slideUp 0.3s"}}><div style={{maxWidth:680,margin:"0 auto"}}>
     <div style={{position:"relative",overflow:"hidden"}}>
       {player.video
-        ?<video src={player.video} poster={player.image} autoPlay muted loop playsInline style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",filter:"blur(2px) saturate(1.15)",opacity:0.55}}/>
+        ?<video src={player.video} poster={vidPoster(player)} autoPlay muted loop playsInline style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",objectPosition:"center 18%",filter:"blur(2px) saturate(1.15)",opacity:0.55}}/>
         :player.image&&<div style={{position:"absolute",inset:0,backgroundImage:`url(${player.image})`,backgroundSize:"cover",backgroundPosition:"center top",filter:"blur(38px) saturate(1.3)",transform:"scale(1.4)",opacity:0.5}}/>}
       <div style={{position:"absolute",inset:0,background:(player.image||player.video)?"linear-gradient(180deg,rgba(11,17,32,0.45) 0%,rgba(11,17,32,0.82) 68%,#0B1120 100%)":"linear-gradient(180deg,rgba(251,191,36,0.12) 0%,transparent 60%)"}}/>
       <div style={{position:"relative",padding:"20px 20px 26px"}}>
@@ -888,7 +914,7 @@ function Profile({player,players,results,fixtures,onClose,gp,data,onTap}){const 
           <div style={{display:"flex",justifyContent:"center",gap:8,flexWrap:"wrap"}}>{pos===1&&e.played>0&&<Badge type="leader"/>}{e.streak>=3&&<Badge type="streak"/>}</div>
           {player.video&&<button onClick={()=>setShowVid(true)} className="press" style={{marginTop:14,background:"rgba(255,255,255,0.12)",border:"1px solid rgba(255,255,255,0.2)",color:"#fff",fontSize:15,fontWeight:700,padding:"10px 20px",borderRadius:24,cursor:"pointer",fontFamily:"var(--bd)",backdropFilter:"blur(6px)"}}>▶ Play Intro</button>}</div>
       </div></div>
-    {showVid&&<VideoModal src={player.video} poster={player.image} name={player.name} onClose={()=>setShowVid(false)}/>}
+    {showVid&&<VideoModal src={player.video} poster={vidPoster(player)} name={player.name} onClose={()=>setShowVid(false)}/>}
     <div style={{padding:"18px 20px 0"}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
         {[["Position",pos>0?`#${pos}`:"-"],["Points",e.pts],["Played",e.played]].map(([l,v])=><div key={l} style={{...C,textAlign:"center",padding:14}}>
@@ -945,7 +971,7 @@ function StatsScreen({players,results,onTap}){
 }
 
 /* ═══ ADMIN ═══ */
-function PlayerAdminRow({p,index,total,onRename,onImg,onRemove,onMove,onVideo,onVideoRemove,uploading,onSetUrl}){
+function PlayerAdminRow({p,index,total,onRename,onImg,onRemove,onMove,onVideo,onVideoRemove,imgBusy,vidBusy,onSetUrl}){
   const[editing,setEditing]=useState(false);const[name,setName]=useState(p.name);const fileRef=useRef(null);const vidRef=useRef(null);
   const[exp,setExp]=useState(false);
   const[imgUrl,setImgUrl]=useState(p.image&&/^https?:/.test(p.image)?p.image:"");
@@ -960,15 +986,15 @@ function PlayerAdminRow({p,index,total,onRename,onImg,onRemove,onMove,onVideo,on
       <div style={{display:"flex",flexDirection:"column",gap:4}}>
         <button onClick={()=>onMove(-1)} disabled={index===0} style={{...mv,opacity:index===0?.3:1}}>▲</button>
         <button onClick={()=>onMove(1)} disabled={index===total-1} style={{...mv,opacity:index===total-1?.3:1}}>▼</button></div>
-      <button onClick={()=>fileRef.current?.click()} style={{padding:0,border:"none",background:"none",cursor:"pointer",position:"relative",flexShrink:0}}>
+      <button onClick={()=>fileRef.current?.click()} disabled={imgBusy} style={{padding:0,border:"none",background:"none",cursor:"pointer",position:"relative",flexShrink:0}}>
         <Av p={p} size={52} noTap/>
-        <span style={{position:"absolute",bottom:-3,right:-3,fontSize:11,background:"#0B1120",borderRadius:"50%",width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid rgba(255,255,255,0.18)"}}>📷</span></button>
+        <span style={{position:"absolute",bottom:-3,right:-3,fontSize:11,background:"#0B1120",borderRadius:"50%",width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid rgba(255,255,255,0.18)"}}>{imgBusy?"⏳":"📷"}</span></button>
       <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={onImg}/>
       {editing
         ? <input autoFocus value={name} onChange={e=>setName(e.target.value)} onBlur={commit} onKeyDown={e=>{if(e.key==="Enter")commit();if(e.key==="Escape"){setName(p.name);setEditing(false)}}} style={{...inp,flex:1,fontSize:17,padding:"10px 12px",minWidth:0}}/>
         : <span onClick={()=>setEditing(true)} style={{flex:1,minWidth:0,fontSize:18,fontWeight:600,color:"#F8FAFC",cursor:"text",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name} <span style={{fontSize:13,color:"#475569"}}>✎</span></span>}
       <button onClick={()=>setExp(v=>!v)} title="Paste photo/video links (Cloudinary etc.)" style={{...btnS,fontSize:16,minWidth:44,minHeight:44,flexShrink:0,background:exp?"rgba(251,191,36,0.18)":"rgba(255,255,255,0.06)",color:exp?"#FBBF24":"#94A3B8"}}>🔗</button>
-      <button onClick={()=>p.video?onVideoRemove():vidRef.current?.click()} disabled={uploading} title={p.video?"Remove intro video":"Upload intro video"} style={{...btnS,fontSize:16,minWidth:44,minHeight:44,flexShrink:0,background:p.video?"rgba(34,197,94,0.15)":"rgba(255,255,255,0.06)",color:p.video?"#22C55E":"#94A3B8"}}>{uploading?"⏳":p.video?"🎬✓":"🎬"}</button>
+      <button onClick={()=>p.video?onVideoRemove():vidRef.current?.click()} disabled={vidBusy} title={p.video?"Remove intro video":"Upload intro video"} style={{...btnS,fontSize:16,minWidth:44,minHeight:44,flexShrink:0,background:p.video?"rgba(34,197,94,0.15)":"rgba(255,255,255,0.06)",color:p.video?"#22C55E":"#94A3B8"}}>{vidBusy?"⏳":p.video?"🎬✓":"🎬"}</button>
       <input ref={vidRef} type="file" accept="video/mp4,video/*" style={{display:"none"}} onChange={onVideo}/>
       <button onClick={onRemove} style={{...btnS,color:"#EF4444",background:"rgba(239,68,68,0.12)",fontSize:18,minWidth:44,minHeight:44,flexShrink:0}}>✕</button></div>
     {exp&&<div style={{...C,borderRadius:"0 0 16px 16px",borderTop:"none",marginTop:-1,padding:"14px 16px",display:"flex",flexDirection:"column",gap:12}}>
@@ -984,18 +1010,22 @@ function PlayerAdminRow({p,index,total,onRename,onImg,onRemove,onMove,onVideo,on
 function AdminScreen({data,save,isAdmin,gistId,onResult}){
   const[view,setView]=useState("main");const[nn,setNn]=useState("");const[tn,setTn]=useState(data.tournamentName);const logoRef=useRef(null);const[startDate,setStartDate]=useState("");
   const[uploading,setUploading]=useState(null);const[repoInput,setRepoInput]=useState(data.mediaRepo||"");const[repoStatus,setRepoStatus]=useState("");
+  const[cloud,setCloud]=useState({name:data.cloudName||"",preset:data.cloudPreset||""});
+  const setField=(pid,field,val)=>save({...data,players:data.players.map(p=>p.id===pid?{...p,[field]:val}:p)});
   const handleVideo=async(pid,e)=>{const file=e.target.files[0];if(!file)return;e.target.value="";
+    if(data.cloudName&&data.cloudPreset){setUploading({pid,kind:"video"});
+      try{const url=await cldUpload(data.cloudName,data.cloudPreset,file,"video");setField(pid,"video",cldOpt(url))}
+      catch(err){alert("Cloudinary video upload failed: "+err.message)}setUploading(null);return}
     const repo=data.mediaRepo,token=localStorage.getItem(TOKEN_KEY);
-    if(!repo){alert("Set your media repo in Settings → Player Videos first.");return}
+    if(!repo){alert("Add a Cloudinary account in Settings (recommended), or set a GitHub media repo, before uploading video.");return}
     if(!token){alert("Admin token missing — log in as admin.");return}
-    if(file.size>20*1024*1024){alert("That clip is over 20MB. jsDelivr won't serve files that big — please use a shorter/compressed mp4.");return}
-    setUploading(pid);
-    try{const inf=await media.info(repo,token);const b64=await fileToBase64(file);const url=await media.upload(repo,token,`videos/${pid}-${Date.now()}.mp4`,b64,inf.default_branch);
-      save({...data,players:data.players.map(p=>p.id===pid?{...p,video:url}:p)});}
+    if(file.size>20*1024*1024){alert("That clip is over 20MB. jsDelivr won't serve files that big — use Cloudinary or a shorter/compressed mp4.");return}
+    setUploading({pid,kind:"video"});
+    try{const inf=await media.info(repo,token);const b64=await fileToBase64(file);const url=await media.upload(repo,token,`videos/${pid}-${Date.now()}.mp4`,b64,inf.default_branch);setField(pid,"video",url);}
     catch(err){alert("Upload failed: "+err.message)}
     setUploading(null);};
-  const removeVideo=pid=>save({...data,players:data.players.map(p=>p.id===pid?{...p,video:null}:p)});
-  const setMediaUrl=(pid,field,url)=>{const v=url.trim();save({...data,players:data.players.map(p=>p.id===pid?{...p,[field]:v||null}:p)})};
+  const removeVideo=pid=>setField(pid,"video",null);
+  const setMediaUrl=(pid,field,url)=>setField(pid,field,url.trim()?cldOpt(url.trim()):null);
   const connectRepo=async()=>{const repo=repoInput.trim().replace(/^https?:\/\/github\.com\//,"").replace(/\/$/,"");const token=localStorage.getItem(TOKEN_KEY);if(!repo){setRepoStatus("Enter owner/repo");return}setRepoStatus("Checking…");try{const inf=await media.info(repo,token);save({...data,mediaRepo:repo});setRepoStatus(`✓ Connected · branch ${inf.default_branch}${inf.private?" · ⚠ repo is private (videos won't load for players — make it public)":""}`)}catch(e){setRepoStatus("✗ "+e.message)}};
   const setAllDates=()=>{if(!startDate)return;const dd={...data.dayDates};const base=new Date(startDate+"T12:00:00");for(let d=0;d<data.days;d++){const dt=new Date(base);dt.setDate(base.getDate()+d);dd[d]=`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;}save({...data,dayDates:dd})};
   const shareUrl=`${location.origin}${location.pathname}?gist=${gistId}`;
@@ -1007,7 +1037,12 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
   const fixtures=generateFixtures(data.players);const gp=id=>data.players.find(p=>p.id===id);
   const addP=()=>{if(!nn.trim())return;save({...data,players:[...data.players,{id:Date.now(),name:nn.trim(),image:null}],schedule:{}});setNn("")};
   const remP=id=>{if(!confirm("Remove player and results?"))return;const nr={...data.results};for(const k in nr)if(nr[k].p1Id===id||nr[k].p2Id===id)delete nr[k];save({...data,players:data.players.filter(p=>p.id!==id),results:nr,schedule:{}})};
-  const handleImg=(pid,e)=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=ev=>{const img=new Image();img.onload=()=>{const c=document.createElement("canvas"),M=140;let w=img.width,h=img.height;if(w>h){h=(h/w)*M;w=M}else{w=(w/h)*M;h=M}c.width=w;c.height=h;c.getContext("2d").drawImage(img,0,0,w,h);save({...data,players:data.players.map(p=>p.id===pid?{...p,image:c.toDataURL("image/jpeg",0.7)}:p)})};img.src=ev.target.result};reader.readAsDataURL(file)};
+  const handleImg=async(pid,e)=>{const file=e.target.files[0];if(!file)return;e.target.value="";
+    if(data.cloudName&&data.cloudPreset){setUploading({pid,kind:"image"});
+      try{const url=await cldUpload(data.cloudName,data.cloudPreset,file,"image");setField(pid,"image",cldOpt(url))}
+      catch(err){alert("Cloudinary photo upload failed: "+err.message)}setUploading(null);return}
+    // No Cloudinary set up → fall back to a small inline base64 thumbnail (lower quality).
+    const reader=new FileReader();reader.onload=ev=>{const img=new Image();img.onload=()=>{const c=document.createElement("canvas"),M=140;let w=img.width,h=img.height;if(w>h){h=(h/w)*M;w=M}else{w=(w/h)*M;h=M}c.width=w;c.height=h;c.getContext("2d").drawImage(img,0,0,w,h);setField(pid,"image",c.toDataURL("image/jpeg",0.7))};img.src=ev.target.result};reader.readAsDataURL(file)};
   const renameP=(id,name)=>save({...data,players:data.players.map(p=>p.id===id?{...p,name}:p)});
   const handleLogo=e=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=ev=>{const img=new Image();img.onload=()=>{const c=document.createElement("canvas"),M=220;let w=img.width,h=img.height;if(w>h){h=(h/w)*M;w=M}else{w=(w/h)*M;h=M}c.width=w;c.height=h;c.getContext("2d").drawImage(img,0,0,w,h);save({...data,logo:c.toDataURL("image/png")})};img.src=ev.target.result};reader.readAsDataURL(file)};
   const moveP=(id,dir)=>{const arr=[...data.players];const i=arr.findIndex(p=>p.id===id);const j=i+dir;if(j<0||j>=arr.length)return;[arr[i],arr[j]]=[arr[j],arr[i]];save({...data,players:arr})};
@@ -1048,7 +1083,7 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
         <Btn onClick={addP} style={{width:"auto",padding:"14px 24px"}}>+ Add</Btn></div>
       {data.players.length>0&&<p style={{fontSize:13,color:"#64748B",marginBottom:14,lineHeight:1.5}}>Tap a name to rename · tap the photo to upload · use ▲▼ to reorder.</p>}
       {data.players.length>0&&<p style={{fontSize:12,color:"#64748B",marginBottom:12,lineHeight:1.5}}>📷 tap photo to upload · <strong style={{color:"#94A3B8"}}>🔗 paste a Cloudinary link for full-quality photos &amp; videos (best)</strong> · 🎬 upload mp4 to your GitHub media repo.</p>}
-      {data.players.map((p,i)=><PlayerAdminRow key={p.id} p={p} index={i} total={data.players.length} onRename={n=>renameP(p.id,n)} onImg={e=>handleImg(p.id,e)} onRemove={()=>remP(p.id)} onMove={dir=>moveP(p.id,dir)} onVideo={e=>handleVideo(p.id,e)} onVideoRemove={()=>removeVideo(p.id)} uploading={uploading===p.id} onSetUrl={(field,url)=>setMediaUrl(p.id,field,url)}/>)}</div>}
+      {data.players.map((p,i)=><PlayerAdminRow key={p.id} p={p} index={i} total={data.players.length} onRename={n=>renameP(p.id,n)} onImg={e=>handleImg(p.id,e)} onRemove={()=>remP(p.id)} onMove={dir=>moveP(p.id,dir)} onVideo={e=>handleVideo(p.id,e)} onVideoRemove={()=>removeVideo(p.id)} imgBusy={uploading&&uploading.pid===p.id&&uploading.kind==="image"} vidBusy={uploading&&uploading.pid===p.id&&uploading.kind==="video"} onSetUrl={(field,url)=>setMediaUrl(p.id,field,url)}/>)}</div>}
 
     {view==="dates"&&<div><h2 style={HS}>Set Dates</h2><p style={{fontSize:15,color:"#94A3B8",marginBottom:16,lineHeight:1.5}}>Set the date for each day. Shows throughout the app.</p>
       <div style={{...C,padding:18,marginBottom:18,background:"rgba(34,197,94,0.06)",border:"1px solid rgba(34,197,94,0.18)"}}>
@@ -1119,8 +1154,15 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
           <Btn onClick={()=>logoRef.current?.click()} style={{flex:1,padding:"14px"}}>{data.logo?"Change Logo":"Upload Logo"}</Btn>
           {data.logo&&<button onClick={()=>save({...data,logo:null})} style={{...btnS,color:"#EF4444",background:"rgba(239,68,68,0.12)",fontSize:18,minWidth:48,minHeight:48}}>✕</button>}</div>
         <input ref={logoRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleLogo}/></div>
-      <div style={{...C,padding:20,marginBottom:14}}><label style={{fontSize:14,color:"#94A3B8",fontWeight:600,display:"block",marginBottom:8}}>🎬 Player Videos — Media Repo</label>
-        <p style={{fontSize:13,color:"#64748B",marginBottom:10,lineHeight:1.5}}>Intro videos are committed to a <strong style={{color:"#94A3B8"}}>public</strong> GitHub repo and served via the jsDelivr CDN. Create a public repo (e.g. <code style={{color:"#FBBF24"}}>you/pool-media</code>) and make sure your admin token has the <strong style={{color:"#94A3B8"}}>repo</strong> scope.</p>
+      <div style={{...C,padding:20,marginBottom:14,border:"1px solid rgba(56,189,248,0.25)"}}><label style={{fontSize:14,color:"#38BDF8",fontWeight:700,display:"block",marginBottom:8}}>☁️ Cloudinary (recommended for photos &amp; videos)</label>
+        <p style={{fontSize:13,color:"#64748B",marginBottom:10,lineHeight:1.5}}>Free account → Settings → <strong style={{color:"#94A3B8"}}>Upload</strong> → add an <strong style={{color:"#94A3B8"}}>Unsigned</strong> upload preset. Paste your cloud name + preset below. Then the 📷 / 🎬 buttons upload straight to Cloudinary at full quality (auto-optimised). No GitHub repo needed.</p>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+          <input value={cloud.name} onChange={e=>setCloud({...cloud,name:e.target.value})} placeholder="cloud name" style={{...inp,fontSize:15,padding:"13px 15px",flex:1,minWidth:130,minHeight:50}}/>
+          <input value={cloud.preset} onChange={e=>setCloud({...cloud,preset:e.target.value})} placeholder="unsigned preset" style={{...inp,fontSize:15,padding:"13px 15px",flex:1,minWidth:130,minHeight:50}}/></div>
+        <Btn onClick={()=>save({...data,cloudName:cloud.name.trim()||null,cloudPreset:cloud.preset.trim()||null})}>{data.cloudName?"Update Cloudinary":"Save Cloudinary"}</Btn>
+        {data.cloudName&&data.cloudPreset&&<div style={{fontSize:13,color:"#22C55E",marginTop:10,fontWeight:600}}>✓ Connected to {data.cloudName} — uploads go to Cloudinary</div>}</div>
+      <div style={{...C,padding:20,marginBottom:14}}><label style={{fontSize:14,color:"#94A3B8",fontWeight:600,display:"block",marginBottom:8}}>🎬 Player Videos — GitHub Media Repo (alternative)</label>
+        <p style={{fontSize:13,color:"#64748B",marginBottom:10,lineHeight:1.5}}>Only needed if you're <em>not</em> using Cloudinary. Videos are committed to a <strong style={{color:"#94A3B8"}}>public</strong> GitHub repo and served via jsDelivr. Create a public repo (e.g. <code style={{color:"#FBBF24"}}>you/pool-media</code>); your admin token needs the <strong style={{color:"#94A3B8"}}>repo</strong> scope.</p>
         <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
           <input value={repoInput} onChange={e=>setRepoInput(e.target.value)} placeholder="owner/repo" style={{...inp,fontSize:16,padding:"14px 16px",flex:1,minWidth:160,minHeight:52}}/>
           <Btn onClick={connectRepo} style={{width:"auto",padding:"14px 22px"}}>Connect</Btn></div>
@@ -1272,7 +1314,7 @@ function App(){
 
     {pp&&<Profile player={pp} players={data.players} results={data.results} fixtures={fixtures} onClose={()=>setPp(null)} gp={gp} data={data} onTap={setPp}/>}
     {reveal&&<ResultReveal reveal={reveal} onClose={()=>setReveal(null)}/>}
-    {intro&&<VideoModal src={intro.video} poster={intro.image} name={intro.name} onClose={()=>setIntro(null)}/>}
+    {intro&&<VideoModal src={intro.video} poster={vidPoster(intro)} name={intro.name} onClose={()=>setIntro(null)}/>}
   </div></VideoCtx.Provider>;
 }
 
