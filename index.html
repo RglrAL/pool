@@ -28,6 +28,8 @@ input[type="date"]{color-scheme:dark}
 @keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(251,191,36,0.0)}50%{box-shadow:0 0 24px 2px rgba(251,191,36,0.35)}}
 @keyframes fadeSlide{0%{opacity:0;transform:translateY(10px)}100%{opacity:1;transform:translateY(0)}}
 @keyframes rowIn{0%{opacity:0;transform:translateY(12px) scale(.98)}100%{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes scoreFlip{0%{transform:rotateX(-90deg) scale(1.35);opacity:0;color:#fff}45%{transform:rotateX(0) scale(1.18);color:#fff}100%{transform:rotateX(0) scale(1)}}
+@keyframes dotIn{0%{transform:scale(0);opacity:0}60%{transform:scale(1.25)}100%{transform:scale(1);opacity:1}}
 ::-webkit-scrollbar{display:none}
 .skel{background:linear-gradient(90deg,rgba(255,255,255,0.04) 25%,rgba(255,255,255,0.10) 37%,rgba(255,255,255,0.04) 63%);background-size:200% 100%;animation:shimmer 1.4s infinite}
 button{transition:transform .12s cubic-bezier(.34,1.56,.64,1),filter .15s ease,background .2s ease}
@@ -188,6 +190,63 @@ function getStats(players,results){
   return{byWins,byStreak:byStreak.streak>=2?byStreak:null,byFrames,big:big&&big.margin>0?{...big,winner}:null};
 }
 
+// Map of playerId -> rank change caused by the most recently played match.
+// Stateless: compares current standings to standings minus the latest result.
+function getRankDeltas(players,results){
+  const all=Object.values(results);if(all.length<1)return{};
+  const latestKey=Object.keys(results).reduce((a,b)=>(results[b].ts||0)>(results[a]?.ts||0)?b:a,null);
+  if(latestKey===null)return{};
+  const prevResults={...results};delete prevResults[latestKey];
+  const now=getTable(players,results),prev=getTable(players,prevResults);
+  const prevPos={};prev.forEach((p,i)=>{prevPos[p.id]=i});
+  const d={};now.forEach((p,i)=>{if(prevPos[p.id]!=null)d[p.id]=prevPos[p.id]-i});
+  return d;
+}
+
+/* ═══ SHAREABLE RESULTS CARD (hand-drawn on canvas — no deps, no CORS issues) ═══ */
+function loadImg(src){return new Promise(res=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>res(null);i.src=src});}
+async function buildResultsCard(data,results){
+  const table=getTable(data.players,results);const top=table.slice(0,8);
+  const W=1080,pad=64,rowH=120,headerH=300,footerH=96;
+  const H=headerH+top.length*rowH+footerH;
+  const c=document.createElement("canvas");c.width=W;c.height=H;const x=c.getContext("2d");
+  const g=x.createLinearGradient(0,0,0,H);g.addColorStop(0,"#101a33");g.addColorStop(1,"#0B1120");x.fillStyle=g;x.fillRect(0,0,W,H);
+  const rg=x.createRadialGradient(W/2,-80,40,W/2,-80,760);rg.addColorStop(0,"rgba(251,191,36,0.20)");rg.addColorStop(1,"rgba(251,191,36,0)");x.fillStyle=rg;x.fillRect(0,0,W,440);
+  const totalF=generateFixtures(data.players).length,played=Object.keys(results).length;const done=totalF>0&&played>=totalF;
+  x.textAlign="center";x.fillStyle="#FBBF24";x.font="68px 'Bebas Neue',sans-serif";x.fillText((data.tournamentName||"Pool Tournament").toUpperCase(),W/2,118);
+  x.fillStyle="#94A3B8";x.font="600 30px 'DM Sans',sans-serif";x.fillText(done?"🏆 FINAL STANDINGS":"LEAGUE STANDINGS",W/2,170);
+  const imgs=await Promise.all(top.map(p=>p.image?loadImg(p.image):Promise.resolve(null)));
+  let y=headerH-72;
+  top.forEach((p,i)=>{
+    const ry=y;const ringC=i===0?"#FBBF24":i===1?"#CBD5E1":i===2?"#D97706":null;
+    if(i===0){x.fillStyle="rgba(251,191,36,0.08)";x.beginPath();x.roundRect?x.roundRect(pad-16,ry-8,W-2*(pad-16),rowH-12,18):x.rect(pad-16,ry-8,W-2*(pad-16),rowH-12);x.fill();}
+    x.textAlign="left";x.fillStyle=ringC||"#64748B";x.font="56px 'Bebas Neue',sans-serif";x.fillText(`${i+1}`,pad,ry+74);
+    const d=88,ix=pad+74,iy=ry+10,cx=ix+d/2,cy=iy+d/2,rad=d/2;
+    x.save();x.beginPath();x.arc(cx,cy,rad,0,7);x.closePath();x.clip();
+    if(imgs[i]){const im=imgs[i];const ar=im.width/im.height;let sw=im.width,sh=im.height;if(ar>1){sw=im.height}else{sh=im.width}x.drawImage(im,(im.width-sw)/2,(im.height-sh)/2,sw,sh,ix,iy,d,d);}
+    else{const col=PAL[Math.abs(p.id||0)%PAL.length];const lg=x.createLinearGradient(ix,iy,ix+d,iy+d);lg.addColorStop(0,col);lg.addColorStop(1,col+"bb");x.fillStyle=lg;x.fillRect(ix,iy,d,d);x.fillStyle="#fff";x.textAlign="center";x.font="44px 'Bebas Neue',sans-serif";x.fillText((p.name||"?").charAt(0).toUpperCase(),cx,cy+16);}
+    x.restore();
+    if(ringC){x.strokeStyle=ringC;x.lineWidth=4;x.beginPath();x.arc(cx,cy,rad,0,7);x.stroke();}
+    x.textAlign="left";x.fillStyle="#F8FAFC";x.font="700 42px 'DM Sans',sans-serif";x.fillText((p.name||"").slice(0,22),pad+190,ry+52);
+    x.fillStyle="#94A3B8";x.font="500 28px 'DM Sans',sans-serif";x.fillText(`Won ${p.wins} · Lost ${p.losses} · Played ${p.played}`,pad+190,ry+92);
+    x.textAlign="right";x.fillStyle="#FBBF24";x.font="72px 'Bebas Neue',sans-serif";x.fillText(`${p.pts}`,W-pad-58,ry+76);
+    x.fillStyle="#64748B";x.font="600 22px 'DM Sans',sans-serif";x.fillText("PTS",W-pad,ry+76);
+    if(i<top.length-1){x.strokeStyle="rgba(255,255,255,0.06)";x.lineWidth=1;x.beginPath();x.moveTo(pad,ry+rowH-10);x.lineTo(W-pad,ry+rowH-10);x.stroke();}
+    y+=rowH;
+  });
+  x.textAlign="center";x.fillStyle="#475569";x.font="600 26px 'DM Sans',sans-serif";x.fillText("🎱 Live tournament · shared via Pool Tournament",W/2,H-40);
+  return c;
+}
+async function shareResultsCard(data,results){
+  let c;try{c=await buildResultsCard(data,results)}catch(e){alert("Could not create image: "+e.message);return}
+  await new Promise(resolve=>c.toBlob(async blob=>{
+    if(!blob){resolve();return}
+    const file=new File([blob],"standings.png",{type:"image/png"});
+    try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:data.tournamentName||"Pool Tournament"});resolve();return}}catch(e){resolve();return}
+    const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download="standings.png";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);resolve();
+  },"image/png"));
+}
+
 /* ═══ PLAYOFF BRACKET ═══ */
 // Standard single-elimination seed slot order so the top seeds can only meet in the final.
 function seedOrder(size){if(size<=2)return[1,2];const prev=seedOrder(size/2);const res=[];for(const s of prev){res.push(s);res.push(size+1-s)}return res}
@@ -250,7 +309,23 @@ function QR({url,size=200}){
   return<div ref={ref} style={{display:"inline-block",lineHeight:0,padding:14,background:"#fff",borderRadius:18,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}/>;
 }
 
-function Dots({form,size=12}){return<div style={{display:"flex",gap:5,justifyContent:"center",marginTop:4}}>{form.slice(-5).map((r,i)=><div key={i} style={{width:size,height:size,borderRadius:"50%",background:r==="W"?"#22C55E":"#EF4444",boxShadow:`0 0 6px ${r==="W"?"rgba(34,197,94,0.4)":"rgba(239,68,68,0.4)"}`}}/>)}</div>;}
+function Dots({form,size=12}){const f=form.slice(-5);return<div style={{display:"flex",gap:5,justifyContent:"center",marginTop:4}}>{f.map((r,i)=><div key={i} style={{width:size,height:size,borderRadius:"50%",background:r==="W"?"#22C55E":"#EF4444",boxShadow:`0 0 6px ${r==="W"?"rgba(34,197,94,0.4)":"rgba(239,68,68,0.4)"}`,animation:"dotIn .4s both",animationDelay:`${i*0.07}s`}}/>)}</div>;}
+
+// Animated score — flips/pops when a result lands live (skips first mount, so it
+// only celebrates real changes while you're watching, not every tab open).
+function Score({r,scoreStyle,vsStyle,vsText="VS"}){
+  const[anim,setAnim]=useState(false);const first=useRef(true);
+  const key=r?`${r.s1}-${r.s2}`:"_";
+  useEffect(()=>{if(first.current){first.current=false;return;}if(r){setAnim(true);const t=setTimeout(()=>setAnim(false),650);return()=>clearTimeout(t)}},[key]);
+  if(!r)return<span style={vsStyle}>{vsText}</span>;
+  return<span style={{display:"inline-block",flexShrink:0,perspective:"360px"}}><span style={{...scoreStyle,display:"inline-block",animation:anim?"scoreFlip .6s ease both":"none"}}>{r.s1}-{r.s2}</span></span>;
+}
+
+// Position change vs the standings before the most recent match was played.
+function RankDelta({delta,size=12}){
+  if(!delta)return null;const up=delta>0;
+  return<span style={{display:"inline-flex",alignItems:"center",fontSize:size,fontWeight:800,color:up?"#22C55E":"#EF4444",fontFamily:"var(--bd)",lineHeight:1,animation:"popIn .3s"}}>{up?"▲":"▼"}{Math.abs(delta)}</span>;
+}
 
 function Badge({type}){const b={leader:{i:"👑",l:"Leader",bg:"rgba(251,191,36,0.2)",c:"#FBBF24"},streak:{i:"🔥",l:"On Fire",bg:"rgba(239,68,68,0.15)",c:"#EF4444"},spoon:{i:"🥄",l:"Last Place",bg:"rgba(148,163,184,0.15)",c:"#94A3B8"}}[type];
   if(!b)return null;return<span style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:13,fontWeight:700,background:b.bg,color:b.c,padding:"4px 12px",borderRadius:20}}>{b.i} {b.l}</span>;}
@@ -427,27 +502,31 @@ function Home({data,players,results,fixtures,gp,onNav,onTap}){
           return<div key={f.id} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 0",borderTop:i>0?"1px solid rgba(255,255,255,0.05)":"none"}}>
             {time&&<span style={{fontSize:13,color:"#64748B",fontWeight:600,width:48,flexShrink:0}}>{time}</span>}
             <Av p={p1} size={36}/><span style={{flex:1,minWidth:0,fontSize:15,fontWeight:r?.winnerId===p1?.id?700:500,color:r?.winnerId===p1?.id?"#22C55E":"#CBD5E1",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p1?.name}</span>
-            {r?<span style={{fontSize:18,fontWeight:800,color:"#FBBF24",fontFamily:"var(--hd)",padding:"0 6px"}}>{r.s1}-{r.s2}</span>:<span style={{fontSize:14,color:"#475569",fontWeight:700,padding:"0 6px"}}>vs</span>}
+            <Score r={r} scoreStyle={{fontSize:18,fontWeight:800,color:"#FBBF24",fontFamily:"var(--hd)",padding:"0 6px"}} vsStyle={{fontSize:14,color:"#475569",fontWeight:700,padding:"0 6px"}} vsText="vs"/>
             <span style={{flex:1,minWidth:0,fontSize:15,textAlign:"right",fontWeight:r?.winnerId===p2?.id?700:500,color:r?.winnerId===p2?.id?"#22C55E":"#CBD5E1",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p2?.name}</span><Av p={p2} size={36}/></div>})}</div>})()}
   </div>;
 }
 
-function Podium({top,onTap}){const order=[top[1],top[0],top[2]].filter(Boolean);const rings={0:"gold",1:"silver",2:"bronze"};const sizes={0:96,1:74,2:74};
+function Podium({top,onTap,deltas={}}){const order=[top[1],top[0],top[2]].filter(Boolean);const rings={0:"gold",1:"silver",2:"bronze"};const sizes={0:96,1:74,2:74};
   return<div style={{display:"flex",alignItems:"flex-end",justifyContent:"center",gap:14,marginBottom:22,padding:"8px 0 4px"}}>
     {order.map(p=>{const rank=top.indexOf(p);const sz=sizes[rank];
-      return<div key={p.id} onClick={()=>onTap(p)} style={{textAlign:"center",cursor:"pointer",flex:rank===0?"0 0 auto":"0 0 auto",animation:"popIn 0.4s"}}>
+      return<div key={p.id} className="press" onClick={()=>onTap(p)} style={{textAlign:"center",cursor:"pointer",flex:"0 0 auto",animation:"popIn 0.4s"}}>
         <div style={{fontSize:rank===0?30:22,marginBottom:4}}>{rank===0?"🥇":rank===1?"🥈":"🥉"}</div>
         <div style={{display:"flex",justifyContent:"center"}}><Av p={p} size={sz} ring={rings[rank]}/></div>
         <div style={{fontSize:rank===0?17:15,fontWeight:700,color:"#F8FAFC",marginTop:8,maxWidth:96,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div>
-        <div style={{fontSize:rank===0?30:24,fontWeight:900,color:"#FBBF24",fontFamily:"var(--hd)",lineHeight:1.1}}>{p.pts}<span style={{fontSize:11,color:"#64748B",marginLeft:3}}>PTS</span></div></div>;})}</div>;}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6}}><div style={{fontSize:rank===0?30:24,fontWeight:900,color:"#FBBF24",fontFamily:"var(--hd)",lineHeight:1.1}}>{p.pts}<span style={{fontSize:11,color:"#64748B",marginLeft:3}}>PTS</span></div><RankDelta delta={deltas[p.id]} size={11}/></div></div>;})}</div>;}
 
-function TableScreen({players,results,onTap}){const table=getTable(players,results);if(!players.length)return<Empty i="🏆" t="No players yet."/>;
+function TableScreen({players,results,onTap,data}){const table=getTable(players,results);const[sharing,setSharing]=useState(false);if(!players.length)return<Empty i="🏆" t="No players yet."/>;
   const podium=table.filter(p=>p.played>0).length>=3?table.slice(0,3):null;const rest=podium?table.slice(3):table;
-  return<div><h2 style={HS}>LEAGUE TABLE</h2>
-    {podium&&<Podium top={table.slice(0,3)} onTap={onTap}/>}
+  const deltas=getRankDeltas(players,results);
+  return<div>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+      <h2 style={{...HS,marginBottom:0}}>LEAGUE TABLE</h2>
+      <button onClick={async()=>{if(sharing)return;setSharing(true);try{await shareResultsCard(data,results)}finally{setSharing(false)}}} disabled={sharing} style={{background:"rgba(251,191,36,0.15)",border:"1px solid rgba(251,191,36,0.3)",color:"#FBBF24",fontWeight:700,fontSize:14,padding:"10px 16px",borderRadius:12,cursor:"pointer",fontFamily:"var(--bd)",minHeight:44,opacity:sharing?.6:1,flexShrink:0}}>{sharing?"Creating…":"📸 Share"}</button></div>
+    {podium&&<Podium top={table.slice(0,3)} onTap={onTap} deltas={deltas}/>}
     <div className="stagger">{rest.map((p)=>{const i=table.indexOf(p);const ring=i===0?"gold":i===1?"silver":i===2?"bronze":undefined;
     return<div key={p.id} className="press" onClick={()=>onTap(p)} style={{...C,display:"flex",alignItems:"center",gap:14,padding:"15px 16px",marginBottom:10,cursor:"pointer",borderLeft:`4px solid ${i===0?"#FBBF24":i<3?"#64748B":"transparent"}`}}>
-    <div style={{width:28,textAlign:"center"}}><span style={{fontSize:22,fontWeight:900,fontFamily:"var(--hd)",color:i<3?"#CBD5E1":"#475569"}}>{i+1}</span></div>
+    <div style={{width:34,textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}><span style={{fontSize:22,fontWeight:900,fontFamily:"var(--hd)",color:i<3?"#CBD5E1":"#475569"}}>{i+1}</span><RankDelta delta={deltas[p.id]} size={11}/></div>
     <Av p={p} size={56} ring={ring}/><div style={{flex:1,minWidth:0}}><div style={{fontSize:19,fontWeight:700,color:"#F8FAFC",marginBottom:5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div>
       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:5}}>{i===0&&p.played>0&&<Badge type="leader"/>}{p.cs>=3&&p.st==="W"&&<Badge type="streak"/>}{i===table.length-1&&table.length>2&&p.played>0&&<Badge type="spoon"/>}</div>
       <div style={{fontSize:14,color:"#94A3B8",fontWeight:500}}>Played {p.played} · Won {p.wins} · Lost {p.losses}</div><Dots form={p.form} size={11}/></div>
@@ -466,7 +545,7 @@ function FixturesScreen({data,players,results,fixtures,gp,onTap}){const[filter,s
           {r?<span style={{color:"#22C55E",fontWeight:700}}>✓ Complete</span>:<span style={{color:"#FBBF24",fontWeight:700}}>⏳ Upcoming</span>}</div>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:10,cursor:"pointer"}} onClick={()=>p1&&onTap(p1)}><Av p={p1} size={48} ring={w1?"green":undefined}/><span style={{fontSize:17,fontWeight:w1?800:500,color:w1?"#22C55E":"#E2E8F0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p1?.name}{w1&&" 🏆"}</span></div>
-          {r?<div style={{fontSize:26,fontWeight:900,color:"#FBBF24",fontFamily:"var(--hd)",padding:"0 8px",flexShrink:0}}>{r.s1}-{r.s2}</div>:<span style={{fontSize:18,fontWeight:800,color:"#334155",padding:"0 10px",flexShrink:0}}>VS</span>}
+          <Score r={r} scoreStyle={{fontSize:26,fontWeight:900,color:"#FBBF24",fontFamily:"var(--hd)",padding:"0 8px"}} vsStyle={{fontSize:18,fontWeight:800,color:"#334155",padding:"0 10px",flexShrink:0}} vsText="VS"/>
           <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:10,justifyContent:"flex-end",cursor:"pointer"}} onClick={()=>p2&&onTap(p2)}><span style={{fontSize:17,fontWeight:w2?800:500,color:w2?"#22C55E":"#E2E8F0",textAlign:"right",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{w2&&"🏆 "}{p2?.name}</span><Av p={p2} size={48} ring={w2?"green":undefined}/></div></div></div>})}</div></div>;}
 
 function ScheduleScreen({data,players,results,fixtures,gp}){if(players.length<2)return<Empty i="📅" t="Add at least 2 players."/>;
@@ -479,7 +558,7 @@ function ScheduleScreen({data,players,results,fixtures,gp}){if(players.length<2)
         return<div key={f.id} style={{display:"flex",alignItems:"center",gap:10,padding:"14px 0",borderTop:i>0?"1px solid rgba(255,255,255,0.05)":"none"}}>
           <span style={{fontSize:15,fontWeight:600,color:"#94A3B8",width:52,flexShrink:0}}>{time||"TBD"}</span><Av p={p1} size={40} ring={r?.winnerId===p1?.id?"green":undefined}/>
           <span style={{flex:1,minWidth:0,fontSize:16,fontWeight:r?.winnerId===p1?.id?700:500,color:r?.winnerId===p1?.id?"#22C55E":"#E2E8F0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p1?.name}</span>
-          {r?<span style={{fontSize:19,fontWeight:800,color:"#FBBF24",fontFamily:"var(--hd)"}}>{r.s1}-{r.s2}</span>:<span style={{fontSize:14,color:"#475569",fontWeight:700}}>vs</span>}
+          <Score r={r} scoreStyle={{fontSize:19,fontWeight:800,color:"#FBBF24",fontFamily:"var(--hd)"}} vsStyle={{fontSize:14,color:"#475569",fontWeight:700}} vsText="vs"/>
           <span style={{flex:1,minWidth:0,fontSize:16,textAlign:"right",fontWeight:r?.winnerId===p2?.id?700:500,color:r?.winnerId===p2?.id?"#22C55E":"#E2E8F0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p2?.name}</span><Av p={p2} size={40} ring={r?.winnerId===p2?.id?"green":undefined}/></div>})}</div>})}</div>;}
 
 function BracketMatch({m,gp,seeds}){const p1=gp(m.p1),p2=gp(m.p2);const r=m.result;
@@ -835,7 +914,7 @@ function App(){
 
     <div key={tab} style={{padding:"20px 16px 100px",fontFamily:"var(--bd)",animation:"fadeSlide .34s cubic-bezier(.22,1,.36,1)"}}>
       {tab==="home"&&<Home data={data} players={data.players} results={data.results} fixtures={fixtures} gp={gp} onNav={setTab} onTap={setPp}/>}
-      {tab==="table"&&<TableScreen players={data.players} results={data.results} onTap={setPp}/>}
+      {tab==="table"&&<TableScreen players={data.players} results={data.results} onTap={setPp} data={data}/>}
       {tab==="fixtures"&&<FixturesScreen data={data} players={data.players} results={data.results} fixtures={fixtures} gp={gp} onTap={setPp}/>}
       {tab==="schedule"&&<ScheduleScreen data={data} players={data.players} results={data.results} fixtures={fixtures} gp={gp}/>}
       {tab==="bracket"&&<BracketScreen data={data} gp={gp}/>}
