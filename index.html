@@ -256,7 +256,7 @@ function getRankDeltas(players,results){
 }
 
 /* ═══ SHAREABLE CARDS (hand-drawn on canvas — no deps, no CORS issues) ═══ */
-function loadImg(src){return new Promise(res=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>res(null);i.src=src});}
+function loadImg(src){return new Promise(res=>{const i=new Image();i.crossOrigin="anonymous";i.onload=()=>res(i);i.onerror=()=>res(null);i.src=src});}
 function newCard(W,H,th){const c=document.createElement("canvas");c.width=W;c.height=H;const x=c.getContext("2d");
   const g=x.createLinearGradient(0,0,0,H);g.addColorStop(0,th.bg0);g.addColorStop(1,th.bg1);x.fillStyle=g;x.fillRect(0,0,W,H);
   const rg=x.createRadialGradient(W/2,-80,40,W/2,-80,820);rg.addColorStop(0,th.glow+"0.20)");rg.addColorStop(1,th.glow+"0)");x.fillStyle=rg;x.fillRect(0,0,W,H*0.55);
@@ -945,25 +945,40 @@ function StatsScreen({players,results,onTap}){
 }
 
 /* ═══ ADMIN ═══ */
-function PlayerAdminRow({p,index,total,onRename,onImg,onRemove,onMove,onVideo,onVideoRemove,uploading}){
+function PlayerAdminRow({p,index,total,onRename,onImg,onRemove,onMove,onVideo,onVideoRemove,uploading,onSetUrl}){
   const[editing,setEditing]=useState(false);const[name,setName]=useState(p.name);const fileRef=useRef(null);const vidRef=useRef(null);
+  const[exp,setExp]=useState(false);
+  const[imgUrl,setImgUrl]=useState(p.image&&/^https?:/.test(p.image)?p.image:"");
+  const[vidUrl,setVidUrl]=useState(p.video||"");
   useEffect(()=>{setName(p.name)},[p.name]);
+  useEffect(()=>{setImgUrl(p.image&&/^https?:/.test(p.image)?p.image:"");setVidUrl(p.video||"")},[p.image,p.video]);
   const commit=()=>{const n=name.trim();if(n&&n!==p.name)onRename(n);else setName(p.name);setEditing(false)};
   const mv={background:"rgba(255,255,255,0.07)",border:"none",borderRadius:8,color:"#94A3B8",width:32,height:24,fontSize:12,cursor:"pointer",lineHeight:1,padding:0};
-  return<div style={{...C,display:"flex",alignItems:"center",gap:11,marginBottom:10,padding:"12px 14px"}}>
-    <div style={{display:"flex",flexDirection:"column",gap:4}}>
-      <button onClick={()=>onMove(-1)} disabled={index===0} style={{...mv,opacity:index===0?.3:1}}>▲</button>
-      <button onClick={()=>onMove(1)} disabled={index===total-1} style={{...mv,opacity:index===total-1?.3:1}}>▼</button></div>
-    <button onClick={()=>fileRef.current?.click()} style={{padding:0,border:"none",background:"none",cursor:"pointer",position:"relative",flexShrink:0}}>
-      <Av p={p} size={52} noTap/>
-      <span style={{position:"absolute",bottom:-3,right:-3,fontSize:11,background:"#0B1120",borderRadius:"50%",width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid rgba(255,255,255,0.18)"}}>📷</span></button>
-    <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={onImg}/>
-    {editing
-      ? <input autoFocus value={name} onChange={e=>setName(e.target.value)} onBlur={commit} onKeyDown={e=>{if(e.key==="Enter")commit();if(e.key==="Escape"){setName(p.name);setEditing(false)}}} style={{...inp,flex:1,fontSize:17,padding:"10px 12px",minWidth:0}}/>
-      : <span onClick={()=>setEditing(true)} style={{flex:1,minWidth:0,fontSize:18,fontWeight:600,color:"#F8FAFC",cursor:"text",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name} <span style={{fontSize:13,color:"#475569"}}>✎</span></span>}
-    <button onClick={()=>p.video?onVideoRemove():vidRef.current?.click()} disabled={uploading} title={p.video?"Remove intro video":"Upload intro video"} style={{...btnS,fontSize:16,minWidth:44,minHeight:44,flexShrink:0,background:p.video?"rgba(34,197,94,0.15)":"rgba(255,255,255,0.06)",color:p.video?"#22C55E":"#94A3B8"}}>{uploading?"⏳":p.video?"🎬✓":"🎬"}</button>
-    <input ref={vidRef} type="file" accept="video/mp4,video/*" style={{display:"none"}} onChange={onVideo}/>
-    <button onClick={onRemove} style={{...btnS,color:"#EF4444",background:"rgba(239,68,68,0.12)",fontSize:18,minWidth:44,minHeight:44,flexShrink:0}}>✕</button></div>;
+  const lblIn={...inp,width:"100%",fontSize:14,padding:"10px 12px"};
+  return<div style={{marginBottom:10}}>
+    <div style={{...C,display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderRadius:exp?"16px 16px 0 0":16}}>
+      <div style={{display:"flex",flexDirection:"column",gap:4}}>
+        <button onClick={()=>onMove(-1)} disabled={index===0} style={{...mv,opacity:index===0?.3:1}}>▲</button>
+        <button onClick={()=>onMove(1)} disabled={index===total-1} style={{...mv,opacity:index===total-1?.3:1}}>▼</button></div>
+      <button onClick={()=>fileRef.current?.click()} style={{padding:0,border:"none",background:"none",cursor:"pointer",position:"relative",flexShrink:0}}>
+        <Av p={p} size={52} noTap/>
+        <span style={{position:"absolute",bottom:-3,right:-3,fontSize:11,background:"#0B1120",borderRadius:"50%",width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid rgba(255,255,255,0.18)"}}>📷</span></button>
+      <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={onImg}/>
+      {editing
+        ? <input autoFocus value={name} onChange={e=>setName(e.target.value)} onBlur={commit} onKeyDown={e=>{if(e.key==="Enter")commit();if(e.key==="Escape"){setName(p.name);setEditing(false)}}} style={{...inp,flex:1,fontSize:17,padding:"10px 12px",minWidth:0}}/>
+        : <span onClick={()=>setEditing(true)} style={{flex:1,minWidth:0,fontSize:18,fontWeight:600,color:"#F8FAFC",cursor:"text",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name} <span style={{fontSize:13,color:"#475569"}}>✎</span></span>}
+      <button onClick={()=>setExp(v=>!v)} title="Paste photo/video links (Cloudinary etc.)" style={{...btnS,fontSize:16,minWidth:44,minHeight:44,flexShrink:0,background:exp?"rgba(251,191,36,0.18)":"rgba(255,255,255,0.06)",color:exp?"#FBBF24":"#94A3B8"}}>🔗</button>
+      <button onClick={()=>p.video?onVideoRemove():vidRef.current?.click()} disabled={uploading} title={p.video?"Remove intro video":"Upload intro video"} style={{...btnS,fontSize:16,minWidth:44,minHeight:44,flexShrink:0,background:p.video?"rgba(34,197,94,0.15)":"rgba(255,255,255,0.06)",color:p.video?"#22C55E":"#94A3B8"}}>{uploading?"⏳":p.video?"🎬✓":"🎬"}</button>
+      <input ref={vidRef} type="file" accept="video/mp4,video/*" style={{display:"none"}} onChange={onVideo}/>
+      <button onClick={onRemove} style={{...btnS,color:"#EF4444",background:"rgba(239,68,68,0.12)",fontSize:18,minWidth:44,minHeight:44,flexShrink:0}}>✕</button></div>
+    {exp&&<div style={{...C,borderRadius:"0 0 16px 16px",borderTop:"none",marginTop:-1,padding:"14px 16px",display:"flex",flexDirection:"column",gap:12}}>
+      <div><div style={{fontSize:12,color:"#94A3B8",fontWeight:700,marginBottom:6}}>📷 Photo URL (high quality)</div>
+        <input value={imgUrl} onChange={e=>setImgUrl(e.target.value)} onBlur={()=>{const cur=p.image&&/^https?:/.test(p.image)?p.image:"";if(imgUrl.trim()!==cur)onSetUrl("image",imgUrl)}} onKeyDown={e=>e.key==="Enter"&&e.target.blur()} placeholder="https://res.cloudinary.com/.../photo.jpg" style={lblIn}/>
+        {p.image&&!/^https?:/.test(p.image)&&!imgUrl&&<div style={{fontSize:11,color:"#64748B",marginTop:4}}>Currently using an uploaded photo — paste a URL to replace it with full quality.</div>}</div>
+      <div><div style={{fontSize:12,color:"#94A3B8",fontWeight:700,marginBottom:6}}>🎬 Video URL (mp4)</div>
+        <input value={vidUrl} onChange={e=>setVidUrl(e.target.value)} onBlur={()=>{if(vidUrl.trim()!==(p.video||""))onSetUrl("video",vidUrl)}} onKeyDown={e=>e.key==="Enter"&&e.target.blur()} placeholder="https://res.cloudinary.com/.../intro.mp4" style={lblIn}/></div>
+      <div style={{fontSize:12,color:"#64748B",lineHeight:1.5}}>Paste a Cloudinary (or any) link. Tip: add <code style={{color:"#FBBF24"}}>f_auto,q_auto</code> after <code style={{color:"#FBBF24"}}>/upload/</code> in a Cloudinary URL for auto-optimised delivery.</div></div>}
+  </div>;
 }
 
 function AdminScreen({data,save,isAdmin,gistId,onResult}){
@@ -980,6 +995,7 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
     catch(err){alert("Upload failed: "+err.message)}
     setUploading(null);};
   const removeVideo=pid=>save({...data,players:data.players.map(p=>p.id===pid?{...p,video:null}:p)});
+  const setMediaUrl=(pid,field,url)=>{const v=url.trim();save({...data,players:data.players.map(p=>p.id===pid?{...p,[field]:v||null}:p)})};
   const connectRepo=async()=>{const repo=repoInput.trim().replace(/^https?:\/\/github\.com\//,"").replace(/\/$/,"");const token=localStorage.getItem(TOKEN_KEY);if(!repo){setRepoStatus("Enter owner/repo");return}setRepoStatus("Checking…");try{const inf=await media.info(repo,token);save({...data,mediaRepo:repo});setRepoStatus(`✓ Connected · branch ${inf.default_branch}${inf.private?" · ⚠ repo is private (videos won't load for players — make it public)":""}`)}catch(e){setRepoStatus("✗ "+e.message)}};
   const setAllDates=()=>{if(!startDate)return;const dd={...data.dayDates};const base=new Date(startDate+"T12:00:00");for(let d=0;d<data.days;d++){const dt=new Date(base);dt.setDate(base.getDate()+d);dd[d]=`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;}save({...data,dayDates:dd})};
   const shareUrl=`${location.origin}${location.pathname}?gist=${gistId}`;
@@ -1031,8 +1047,8 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
       <div style={{display:"flex",gap:10,marginBottom:16}}><input value={nn} onChange={e=>setNn(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addP()} placeholder="Player name..." style={{...inp,flex:1,fontSize:17,padding:"14px 18px"}}/>
         <Btn onClick={addP} style={{width:"auto",padding:"14px 24px"}}>+ Add</Btn></div>
       {data.players.length>0&&<p style={{fontSize:13,color:"#64748B",marginBottom:14,lineHeight:1.5}}>Tap a name to rename · tap the photo to upload · use ▲▼ to reorder.</p>}
-      {data.players.length>0&&<p style={{fontSize:12,color:"#64748B",marginBottom:12}}>🎬 = upload a short intro video {data.mediaRepo?"":"(set up the media repo in Settings first)"}.</p>}
-      {data.players.map((p,i)=><PlayerAdminRow key={p.id} p={p} index={i} total={data.players.length} onRename={n=>renameP(p.id,n)} onImg={e=>handleImg(p.id,e)} onRemove={()=>remP(p.id)} onMove={dir=>moveP(p.id,dir)} onVideo={e=>handleVideo(p.id,e)} onVideoRemove={()=>removeVideo(p.id)} uploading={uploading===p.id}/>)}</div>}
+      {data.players.length>0&&<p style={{fontSize:12,color:"#64748B",marginBottom:12,lineHeight:1.5}}>📷 tap photo to upload · <strong style={{color:"#94A3B8"}}>🔗 paste a Cloudinary link for full-quality photos &amp; videos (best)</strong> · 🎬 upload mp4 to your GitHub media repo.</p>}
+      {data.players.map((p,i)=><PlayerAdminRow key={p.id} p={p} index={i} total={data.players.length} onRename={n=>renameP(p.id,n)} onImg={e=>handleImg(p.id,e)} onRemove={()=>remP(p.id)} onMove={dir=>moveP(p.id,dir)} onVideo={e=>handleVideo(p.id,e)} onVideoRemove={()=>removeVideo(p.id)} uploading={uploading===p.id} onSetUrl={(field,url)=>setMediaUrl(p.id,field,url)}/>)}</div>}
 
     {view==="dates"&&<div><h2 style={HS}>Set Dates</h2><p style={{fontSize:15,color:"#94A3B8",marginBottom:16,lineHeight:1.5}}>Set the date for each day. Shows throughout the app.</p>
       <div style={{...C,padding:18,marginBottom:18,background:"rgba(34,197,94,0.06)",border:"1px solid rgba(34,197,94,0.18)"}}>
