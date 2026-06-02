@@ -222,7 +222,7 @@ async function decryptToken(auth,password){ // throws if the password is wrong (
 
 /* ═══ DATA DEFAULTS & HELPERS ═══ */
 // Bundled fallback background track; admin can override with any URL via Settings (data.music).
-const DEFAULT_MUSIC="/media/loopy.mp3";
+const DEFAULT_MUSIC="https://cdn.jsdelivr.net/gh/RglrAL/pool@main/media/loopy.mp3";
 const DEF={tournamentName:"Pool Tournament 2026",days:5,players:[],results:{},schedule:{},dayDates:{},dayLabels:{},matchTimes:{},music:"",auth:null,playoffs:{enabled:false,size:4,seeds:[],matches:{}}};
 
 function generateFixtures(players){
@@ -805,7 +805,68 @@ function StatCard({label,player,value,sub,onTap}){
         <div style={{fontSize:20,fontWeight:900,color:"#FBBF24",fontFamily:"var(--hd)",lineHeight:1.1}}>{value}<span style={{fontSize:12,color:"#64748B",marginLeft:5,fontFamily:"var(--bd)",fontWeight:600}}>{sub}</span></div></div></div></div>;
 }
 
-function Home({data,players,results,fixtures,gp,onNav,onTap}){
+/* ═══ HOME PLAYER MONTAGE — a broadcast-style hero under the banner. Four styles; one is picked
+   at random per app open (see montageRef in App) so it feels fresh each time. ═══ */
+const MONTAGE_COUNT=4;
+// 1) Auto-scroll reel — every player glides past on a seamless loop (reuses the ticker keyframe).
+function ReelMontage({players,onTap}){
+  const row=players.concat(players);const dur=Math.max(16,players.length*4.5);
+  return<div style={{...C,padding:"14px 0",overflow:"hidden"}}>
+    <div style={{display:"flex",gap:20,width:"max-content",animation:`ticker ${dur}s linear infinite`,paddingLeft:20}}>
+      {row.map((p,i)=><div key={i} onClick={()=>onTap(p)} style={{textAlign:"center",cursor:"pointer",flexShrink:0,width:78}}>
+        <div style={{display:"flex",justifyContent:"center"}}><Av p={p} size={66} ring="gold" noTap/></div>
+        <div style={{fontSize:13,fontWeight:700,color:"#E2E8F0",marginTop:8,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div></div>)}
+    </div></div>;
+}
+// 2) Rotating spotlight — one player at a time, photo + name + rank, cross-fading every ~3s.
+function SpotlightMontage({players,results,onTap}){
+  const table=useMemo(()=>getTable(players,results),[players,results]);
+  const[i,setI]=useState(0);
+  useEffect(()=>{const t=setInterval(()=>setI(v=>(v+1)%players.length),3200);return()=>clearInterval(t)},[players.length]);
+  const p=players[i%players.length];const pos=table.findIndex(t=>t.id===p.id)+1;const e=table.find(t=>t.id===p.id)||{};const poster=vidPoster(p);
+  return<div onClick={()=>onTap(p)} style={{...C,padding:0,overflow:"hidden",height:150,position:"relative",cursor:"pointer"}}>
+    <div key={p.id} style={{position:"absolute",inset:0,display:"flex",alignItems:"center",gap:16,padding:18,animation:"fadeIn .6s"}}>
+      {poster?<div style={{width:114,height:114,borderRadius:16,overflow:"hidden",flexShrink:0,border:"2px solid rgba(251,191,36,0.5)",boxShadow:"0 6px 18px rgba(0,0,0,0.4)"}}><div style={{width:"100%",height:"100%",backgroundImage:`url(${poster})`,backgroundSize:"cover",backgroundPosition:"center",animation:"kenburns 4s linear both"}}/></div>:<Av p={p} size={114} ring="gold" noTap/>}
+      <div style={{minWidth:0}}>
+        <div style={{fontSize:12,fontWeight:800,letterSpacing:2,color:"#FBBF24",fontFamily:"var(--hd)"}}>{pos>0?`#${pos} · ${e.pts||0} PTS`:"PLAYER"}</div>
+        <div style={{fontSize:30,fontWeight:900,color:"#F8FAFC",fontFamily:"var(--hd)",letterSpacing:.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div>
+        {e.form&&e.form.length>0&&<div style={{marginTop:6}}><Dots form={e.form} size={10}/></div>}</div>
+    </div>
+    <div style={{position:"absolute",bottom:10,left:0,right:0,display:"flex",justifyContent:"center",gap:5}}>{players.map((_,k)=><div key={k} style={{width:k===i?16:6,height:5,borderRadius:4,background:k===i?"#FBBF24":"rgba(255,255,255,0.25)",transition:"all .3s"}}/>)}</div>
+  </div>;
+}
+// 3) Cinematic montage — full-width photo with a slow Ken Burns, cross-fading through everyone.
+function CinematicMontage({players,onTap}){
+  const[i,setI]=useState(0);
+  useEffect(()=>{const t=setInterval(()=>setI(v=>(v+1)%players.length),3600);return()=>clearInterval(t)},[players.length]);
+  const p=players[i%players.length];const poster=vidPoster(p);
+  return<div onClick={()=>onTap(p)} style={{...C,padding:0,overflow:"hidden",height:160,position:"relative",cursor:"pointer"}}>
+    {poster?<div key={p.id} style={{position:"absolute",inset:0,backgroundImage:`url(${poster})`,backgroundSize:"cover",backgroundPosition:"center 30%",animation:"kenburns 4.2s linear both, fadeIn .8s"}}/>:<div style={{position:"absolute",inset:0,background:"#0B1120"}}/>}
+    <div style={{position:"absolute",inset:0,background:"linear-gradient(180deg,rgba(11,17,32,0.25),rgba(11,17,32,0.45) 60%,rgba(11,17,32,0.92))"}}/>
+    <div style={{position:"absolute",top:14,left:0,right:0,textAlign:"center",fontSize:13,fontWeight:800,letterSpacing:4,color:"#FBBF24",fontFamily:"var(--hd)",textShadow:"0 2px 12px rgba(0,0,0,0.6)"}}>THE CONTENDERS</div>
+    <div key={p.id+"n"} style={{position:"absolute",bottom:24,left:20,fontSize:32,fontWeight:900,color:"#F8FAFC",fontFamily:"var(--hd)",letterSpacing:1,textShadow:"0 2px 16px rgba(0,0,0,0.85)",animation:"slideInL .5s both"}}>{(p.name||"").toUpperCase()}</div>
+    <div style={{position:"absolute",bottom:10,left:0,right:0,display:"flex",justifyContent:"center",gap:5}}>{players.map((_,k)=><div key={k} style={{width:k===i?16:6,height:5,borderRadius:4,background:k===i?"#FBBF24":"rgba(255,255,255,0.3)",transition:"all .3s"}}/>)}</div>
+  </div>;
+}
+// 4) Floating cluster — all avatars at once, gently bobbing with a gold glow.
+function ClusterMontage({players,onTap}){
+  return<div style={{...C,padding:"18px 14px"}}>
+    <div style={{display:"flex",flexWrap:"wrap",justifyContent:"center",gap:"14px 16px"}}>
+      {players.map((p,idx)=><div key={p.id} onClick={()=>onTap(p)} style={{cursor:"pointer",animation:`float 3.4s ease-in-out ${(idx%6)*0.25}s infinite`,textAlign:"center",width:72}}>
+        <div style={{display:"flex",justifyContent:"center"}}><Av p={p} size={62} ring="gold" noTap/></div>
+        <div style={{fontSize:12,fontWeight:600,color:"#94A3B8",marginTop:6,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div></div>)}
+    </div></div>;
+}
+function PlayerMontage({variant,players,results,onTap}){
+  if(!players||players.length<2)return null;
+  const v=((variant%MONTAGE_COUNT)+MONTAGE_COUNT)%MONTAGE_COUNT;
+  if(v===0)return<ReelMontage players={players} onTap={onTap}/>;
+  if(v===1)return<SpotlightMontage players={players} results={results} onTap={onTap}/>;
+  if(v===2)return<CinematicMontage players={players} onTap={onTap}/>;
+  return<ClusterMontage players={players} onTap={onTap}/>;
+}
+
+function Home({data,players,results,fixtures,gp,onNav,onTap,montage}){
   const[reel,setReel]=useState(false);
   const table=getTable(players,results);const leader=table[0];
   const totalF=fixtures.length,played=Object.keys(results).length;
@@ -825,6 +886,7 @@ function Home({data,players,results,fixtures,gp,onNav,onTap}){
 
   const leagueDone=totalF>0&&played>=totalF;
   return<div style={{display:"flex",flexDirection:"column",gap:18}}>
+    <PlayerMontage variant={montage} players={players} results={results} onTap={onTap}/>
     {tickerItems.length>0&&<Ticker items={tickerItems}/>}
     {leader&&leader.played>0&&<div className="press" onClick={()=>onTap(leader)} style={{...C,background:"linear-gradient(160deg,rgba(251,191,36,0.18) 0%,rgba(251,191,36,0.02) 70%)",border:"1.5px solid rgba(251,191,36,0.35)",textAlign:"center",padding:"26px 20px 24px",cursor:"pointer",animation:leagueDone?"glow 2.5s infinite":"slideUp 0.4s"}}>
       <div style={{fontSize:13,color:"#FBBF24",fontWeight:800,letterSpacing:3,textTransform:"uppercase",marginBottom:16,fontFamily:"var(--hd)"}}>{leagueDone?"🏆 League Champion 🏆":"🏆 Current Leader"}</div>
@@ -1374,12 +1436,13 @@ function App(){
   const[showLogin,setShowLogin]=useState(false);
   const[splash,setSplash]=useState(false);   // broadcast intro overlay
   const splashDoneRef=useRef(false);
+  const montageRef=useRef(Math.floor(Math.random()*4));  // which Home montage this app-open shows
   const loginAdmin=tok=>{setToken(tok);localStorage.setItem(TOKEN_KEY,tok);setShowLogin(false);showToast("🔓 Logged in as admin")};
   const[sound,setSound]=useState(window.__poolSound);
   const toggleSound=()=>{const v=!window.__poolSound;window.__poolSound=v;localStorage.setItem("pool-sound",v?"1":"0");setSound(v);if(v){try{_actx().resume&&_actx().resume();playSound("win")}catch(e){}}};
   // ─── Background music: optional looping track (admin URL or bundled default). Starts on a tap (autoplay
   //     rules); the icon reflects real playback, and a tap that can't play explains why (missing file vs autoplay). ───
-  const musicRef=useRef(null);if(!musicRef.current){const a=new Audio();a.loop=true;a.volume=0.18;a.preload="auto";musicRef.current=a;}
+  const musicRef=useRef(null);if(!musicRef.current){const a=new Audio();a.loop=true;a.volume=0.55;a.preload="auto";musicRef.current=a;}
   const[musicOn,setMusicOn]=useState(localStorage.getItem("pool-music")==="1");
   const musicSrc=data.music||DEFAULT_MUSIC;
   const playMusic=()=>{const a=musicRef.current;if(a.getAttribute("src")!==musicSrc)a.src=musicSrc;return a.play();};
@@ -1396,7 +1459,7 @@ function App(){
   // Duck the music whenever a non-muted video plays anywhere (intros/reels). Capture phase catches non-bubbling media events.
   // Recompute from the live DOM on each event rather than counting (play/playing can both fire) so the volume can't desync.
   useEffect(()=>{const a=musicRef.current;
-    const apply=()=>{const playing=[...document.querySelectorAll("video")].some(v=>!v.muted&&!v.paused&&!v.ended);a.volume=playing?0.03:0.18};
+    const apply=()=>{const playing=[...document.querySelectorAll("video")].some(v=>!v.muted&&!v.paused&&!v.ended);a.volume=playing?0.08:0.55};
     ["play","playing","pause","ended","emptied"].forEach(ev=>document.addEventListener(ev,apply,true));
     return()=>["play","playing","pause","ended","emptied"].forEach(ev=>document.removeEventListener(ev,apply,true))},[]);
   useEffect(()=>()=>{musicRef.current&&musicRef.current.pause()},[]);
@@ -1507,7 +1570,7 @@ function App(){
     {toast&&<div onClick={()=>setToast(null)} style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:200,background:"linear-gradient(135deg,#22C55E,#16A34A)",color:"#06210F",fontWeight:800,fontSize:15,padding:"13px 22px",borderRadius:16,boxShadow:"0 10px 30px rgba(0,0,0,0.5)",maxWidth:"90%",fontFamily:"var(--bd)",animation:"slideUp 0.3s",cursor:"pointer"}}>{toast}</div>}
 
     <div key={tab} style={{padding:"20px 16px 100px",fontFamily:"var(--bd)",animation:"fadeSlide .34s cubic-bezier(.22,1,.36,1)"}}>
-      {tab==="home"&&<Home data={data} players={data.players} results={data.results} fixtures={fixtures} gp={gp} onNav={setTab} onTap={setPp}/>}
+      {tab==="home"&&<Home data={data} players={data.players} results={data.results} fixtures={fixtures} gp={gp} onNav={setTab} onTap={setPp} montage={montageRef.current}/>}
       {tab==="table"&&<TableScreen players={data.players} results={data.results} onTap={setPp} data={data}/>}
       {tab==="fixtures"&&<FixturesScreen data={data} players={data.players} results={data.results} fixtures={fixtures} gp={gp} onTap={setPp}/>}
       {tab==="bracket"&&<BracketScreen data={data} gp={gp} onTap={setPp}/>}
