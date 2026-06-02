@@ -223,36 +223,36 @@ async function decryptToken(auth,password){ // throws if the password is wrong (
 /* ═══ DATA DEFAULTS & HELPERS ═══ */
 // Bundled fallback background track; admin can override with any URL via Settings (data.music).
 const DEFAULT_MUSIC="https://cdn.jsdelivr.net/gh/RglrAL/pool@main/media/loopy.mp3";
-const DEF={tournamentName:"Pool Tournament 2026",days:5,players:[],results:{},schedule:{},dayDates:{},dayLabels:{},matchTimes:{},music:"",auth:null,playoffs:{enabled:false,size:4,seeds:[],matches:{}}};
+const DEF={tournamentName:"Pool Tournament 2026",days:5,legs:2,players:[],results:{},schedule:{},dayDates:{},dayLabels:{},matchTimes:{},music:"",auth:null,playoffs:{enabled:false,size:4,seeds:[],matches:{}}};
 
-function generateFixtures(players){
+// `legs` = how many times each pair plays (admin-configurable; default 2 = home & away).
+// Home/away alternates each leg. Leg 1 & 2 keep identical ids to the old 2-leg scheme, so existing data is safe.
+function generateFixtures(players,legs=2){
   // Sort by creation id so fixture ids stay stable no matter how the admin
   // reorders the roster — that keeps existing results/schedule mapped correctly.
   const ps=[...players].sort((a,b)=>a.id-b.id);
-  const f=[];let id=0;
-  for(let i=0;i<ps.length;i++)for(let j=i+1;j<ps.length;j++){
-    f.push({id:id++,p1:ps[i].id,p2:ps[j].id,leg:1});
-    f.push({id:id++,p1:ps[j].id,p2:ps[i].id,leg:2});}
+  const f=[];let id=0;const L=Math.max(1,legs||2);
+  for(let i=0;i<ps.length;i++)for(let j=i+1;j<ps.length;j++)
+    for(let l=1;l<=L;l++){const swap=l%2===0;
+      f.push({id:id++,p1:swap?ps[j].id:ps[i].id,p2:swap?ps[i].id:ps[j].id,leg:l});}
   return f;
 }
 
-function smartSchedule(players,fixtures,numDays){
+function smartSchedule(players,fixtures,numDays,legs=2){
   const n=players.length;if(n<2)return{};
   const arr=players.map(p=>p.id);const isOdd=n%2===1;
   if(isOdd)arr.push(null);const en=arr.length;
-  const leg1=[],leg2=[];
+  const base=[];                                 // one full single round-robin (circle method)
   for(let round=0;round<en-1;round++){
-    const r1=[],r2=[];
-    for(let i=0;i<en/2;i++){const a=arr[i],b=arr[en-1-i];
-      if(a!=null&&b!=null){r1.push([a,b]);r2.push([b,a])}}
-    leg1.push(r1);leg2.push(r2);
-    const last=arr.pop();arr.splice(1,0,last);}
-  const all=[...leg1,...leg2];const sched={};
-  const rpd=Math.ceil(all.length/numDays);
+    const r=[];for(let i=0;i<en/2;i++){const a=arr[i],b=arr[en-1-i];if(a!=null&&b!=null)r.push([a,b])}
+    base.push(r);const last=arr.pop();arr.splice(1,0,last);}
+  const L=Math.max(1,legs||2);const all=[];
+  for(let l=0;l<L;l++){const swap=l%2===1;base.forEach(r=>all.push(r.map(([a,b])=>swap?[b,a]:[a,b])));}
+  const sched={};const used=new Set();const rpd=Math.ceil(all.length/numDays);
   for(let d=0;d<numDays;d++){sched[d]=[];
     for(let r=d*rpd;r<Math.min((d+1)*rpd,all.length);r++)
-      for(const[p1,p2]of all[r]){const fx=fixtures.find(f=>f.p1===p1&&f.p2===p2);
-        if(fx)sched[d].push(fx.id)}}
+      for(const[p1,p2]of all[r]){const fx=fixtures.find(f=>f.p1===p1&&f.p2===p2&&!used.has(f.id));
+        if(fx){used.add(fx.id);sched[d].push(fx.id)}}}
   return sched;
 }
 
@@ -338,7 +338,7 @@ async function buildStandingsCard(data,results,th){
   const table=getTable(data.players,results);const top=table.slice(0,8);
   const W=1080,pad=60,rowH=134,headerH=300,footerH=96;const H=headerH+top.length*rowH+footerH;
   const{c,x}=newCard(W,H,th);
-  const totalF=generateFixtures(data.players).length,played=Object.keys(results).length;const done=totalF>0&&played>=totalF;
+  const totalF=generateFixtures(data.players,data.legs).length,played=Object.keys(results).length;const done=totalF>0&&played>=totalF;
   const logo=data.logo?await loadImg(data.logo):null;
   cardTitle(x,W,data.tournamentName,done?"🏆 FINAL STANDINGS":"LEAGUE STANDINGS",th,logo);
   const imgs=await Promise.all(top.map(p=>p.image?loadImg(p.image):Promise.resolve(null)));
@@ -359,7 +359,7 @@ async function buildStandingsCard(data,results,th){
 async function buildChampionCard(data,results,player,th){
   const table=getTable(data.players,results);const p=player||table[0];if(!p)return buildStandingsCard(data,results,th);
   const e=table.find(t=>t.id===p.id)||p;const pos=table.findIndex(t=>t.id===p.id)+1;
-  const totalF=generateFixtures(data.players).length,played=Object.keys(results).length;const done=totalF>0&&played>=totalF;
+  const totalF=generateFixtures(data.players,data.legs).length,played=Object.keys(results).length;const done=totalF>0&&played>=totalF;
   const W=1080,H=1240;const{c,x}=newCard(W,H,th);
   const logo=data.logo?await loadImg(data.logo):null;
   cardTitle(x,W,data.tournamentName,done?"CHAMPION":pos===1?"CURRENT LEADER":"PLAYER",th,logo);
@@ -394,7 +394,7 @@ async function buildPlayerCard(data,results,player,th){
 }
 async function buildDayCard(data,results,th,opts){
   const d=opts.day;const gp=id=>data.players.find(p=>p.id===id);
-  const ids=data.schedule?.[d]||[];const allFix=generateFixtures(data.players);
+  const ids=data.schedule?.[d]||[];const allFix=generateFixtures(data.players,data.legs);
   const dayFix=ids.map(id=>allFix.find(f=>f.id===id)).filter(Boolean);
   const lbl=getDayLabel(data,d);const sub=lbl.sub?`${lbl.main} · ${lbl.sub}`:lbl.main;
   const W=1080,pad=56,rowH=150,headerH=300,footerH=96;const H=headerH+Math.max(1,dayFix.length)*rowH+footerH;
@@ -649,7 +649,7 @@ function Intro({data,players,results,onDone}){
     <div style={{position:"absolute",inset:0,background:"radial-gradient(circle at 50% 36%,rgba(251,191,36,0.16),transparent 60%)"}}/>
     {step.t==="open"&&<div key="open" style={{position:"relative",textAlign:"center",width:"100%",padding:20}}>
       {sweep}
-      {data.logo&&<img src={data.logo} alt="" style={{width:84,height:84,objectFit:"contain",margin:"0 auto 14px",display:"block",animation:"popIn .5s both"}}/>}
+      {data.logo&&<img src={data.logo} alt="" style={{width:132,height:132,objectFit:"contain",margin:"0 auto 18px",display:"block",animation:"popIn .5s both"}}/>}
       <div style={{fontSize:"min(15vw,76px)",lineHeight:.95,fontWeight:400,color:"#FBBF24",fontFamily:"var(--hd)",letterSpacing:2,textShadow:"0 4px 40px rgba(251,191,36,0.5)",animation:"slam .7s cubic-bezier(.2,1.3,.4,1) both",padding:"0 10px"}}>{(data.tournamentName||"Pool Tournament").toUpperCase()}</div>
       <div style={{height:3,width:150,margin:"18px auto 0",background:"linear-gradient(90deg,transparent,#FBBF24,transparent)",animation:"fadeIn .6s both",animationDelay:".45s"}}/>
       <div className="stagger" style={{display:"flex",justifyContent:"center",gap:8,marginTop:26,flexWrap:"wrap",maxWidth:360,marginLeft:"auto",marginRight:"auto"}}>
@@ -1096,10 +1096,19 @@ function Profile({player,players,results,fixtures,onClose,gp,data,onTap}){const 
           <span style={{fontSize:22,width:28}}>{won?"✅":"❌"}</span><Av p={o} size={60}/><div style={{flex:1}}><span style={{fontSize:16,color:"#E2E8F0",fontWeight:500}}>{won?"Beat":"Lost to"} <strong>{o?.name||"?"}</strong></span></div>
 </div>})}
       {rem.length>0&&<><h3 style={{...HS,fontSize:18,marginTop:24}}>Still to Play ({rem.length})</h3>
-        {rem.map(f=>{const oid=f.p1===player.id?f.p2:f.p1;const o=gp(oid);const di=remSched[f.id];const time=data?.matchTimes?.[f.id];
-          return<div key={f.id} onClick={()=>o&&onTap&&onTap(o)} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 0",borderBottom:"1px solid rgba(255,255,255,0.05)",cursor:o?"pointer":"default"}}>
-            <Av p={o} size={64}/><div style={{flex:1,minWidth:0}}><div style={{fontSize:17,color:"#E2E8F0",fontWeight:500}}>vs {o?.name}</div>
-              {(di!==undefined||time)&&<div style={{fontSize:13,color:"#64748B",fontWeight:500,marginTop:3,display:"flex",alignItems:"center",gap:6}}>{di!==undefined&&<DH data={data} d={di} size="small"/>}{di!==undefined&&time&&<span style={{color:"#334155"}}>·</span>}{time&&<span>⏰ {time}</span>}</div>}</div></div>})}</>}
+        {(()=>{const tval=f=>data?.matchTimes?.[f.id]||"";
+          const groups={};rem.forEach(f=>{const d=remSched[f.id];const k=d===undefined?"x":d;(groups[k]=groups[k]||[]).push(f)});
+          // Chronological: by day, unscheduled last; then by kick-off time, then fixture order.
+          const keys=Object.keys(groups).sort((a,b)=>a==="x"?1:b==="x"?-1:a-b);
+          return keys.map(k=>{const fs=groups[k].slice().sort((a,b)=>{const ta=tval(a),tb=tval(b);if(ta&&tb&&ta!==tb)return ta<tb?-1:1;if(ta!==tb)return ta?-1:1;return a.id-b.id});
+            return<div key={k} style={{marginTop:16}}>
+              <div style={{marginBottom:8}}>{k==="x"?<span style={{fontSize:16,fontWeight:800,color:"#64748B",fontFamily:"var(--hd)",letterSpacing:1.5,textTransform:"uppercase"}}>Unscheduled</span>:<DH data={data} d={parseInt(k)}/>}</div>
+              {fs.map(f=>{const oid=f.p1===player.id?f.p2:f.p1;const o=gp(oid);const time=tval(f);
+                return<div key={f.id} onClick={()=>o&&onTap&&onTap(o)} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 0",borderBottom:"1px solid rgba(255,255,255,0.05)",cursor:o?"pointer":"default"}}>
+                  <Av p={o} size={64}/><div style={{flex:1,minWidth:0}}><div style={{fontSize:17,color:"#E2E8F0",fontWeight:500}}>vs {o?.name}</div>
+                    {time&&<div style={{fontSize:13,color:"#64748B",fontWeight:500,marginTop:3}}>⏰ {time}</div>}</div></div>})}
+            </div>;});
+        })()}</>}
     </div></div></div>;
 }
 
@@ -1199,7 +1208,7 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
     <h2 style={{...HS,textAlign:"center",fontSize:24}}>Admin Only</h2>
     <p style={{color:"#94A3B8",fontSize:16,lineHeight:1.5}}>You're viewing as a player. To manage the tournament, open this page on the admin's device (the one with the GitHub token).</p></div>;
 
-  const fixtures=generateFixtures(data.players);const gp=id=>data.players.find(p=>p.id===id);
+  const fixtures=generateFixtures(data.players,data.legs);const gp=id=>data.players.find(p=>p.id===id);
   const addP=()=>{if(!nn.trim())return;save({...data,players:[...data.players,{id:Date.now(),name:nn.trim(),image:null}],schedule:{}});setNn("")};
   const remP=id=>{if(!confirm("Remove player and results?"))return;const nr={...data.results};for(const k in nr)if(nr[k].p1Id===id||nr[k].p2Id===id)delete nr[k];save({...data,players:data.players.filter(p=>p.id!==id),results:nr,schedule:{}})};
   const handleImg=async(pid,e)=>{const file=e.target.files[0];if(!file)return;e.target.value="";
@@ -1211,7 +1220,11 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
   const renameP=(id,name)=>save({...data,players:data.players.map(p=>p.id===id?{...p,name}:p)});
   const handleLogo=e=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=ev=>{const img=new Image();img.onload=()=>{const c=document.createElement("canvas"),M=220;let w=img.width,h=img.height;if(w>h){h=(h/w)*M;w=M}else{w=(w/h)*M;h=M}c.width=w;c.height=h;c.getContext("2d").drawImage(img,0,0,w,h);save({...data,logo:c.toDataURL("image/png")})};img.src=ev.target.result};reader.readAsDataURL(file)};
   const moveP=(id,dir)=>{const arr=[...data.players];const i=arr.findIndex(p=>p.id===id);const j=i+dir;if(j<0||j>=arr.length)return;[arr[i],arr[j]]=[arr[j],arr[i]];save({...data,players:arr})};
-  const autoS=()=>{save({...data,schedule:smartSchedule(data.players,fixtures,data.days)})};
+  const autoS=()=>{save({...data,schedule:smartSchedule(data.players,fixtures,data.days,data.legs)})};
+  const setLegs=n=>{n=Math.max(1,Math.min(6,n||2));if(n===(data.legs||2))return;
+    const hasData=Object.keys(data.results||{}).length||Object.keys(data.schedule||{}).length;
+    if(hasData&&!confirm("Changing how many times pairs play rebuilds every fixture — this clears existing results and the schedule. Continue?"))return;
+    save({...data,legs:n,...(hasData?{results:{},schedule:{}}:{})});};
   const reveal=(wid,a,b)=>{if(!onResult)return;const lId=wid===a?b:a;onResult({winner:gp(wid),loser:gp(lId)})};
   const recRes=(fid,wid,f)=>{save({...data,results:{...data.results,[fid]:{winnerId:wid,p1Id:f.p1,p2Id:f.p2,ts:Date.now()}}});reveal(wid,f.p1,f.p2)};
   const clrRes=fid=>{const nr={...data.results};delete nr[fid];save({...data,results:nr})};
@@ -1348,6 +1361,11 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
         {data.mediaRepo&&!repoStatus&&<div style={{fontSize:13,color:"#22C55E",marginTop:10,fontWeight:600}}>✓ Using {data.mediaRepo}</div>}</div>
       <div style={{...C,padding:20,marginBottom:14}}><label style={{fontSize:14,color:"#94A3B8",fontWeight:600,display:"block",marginBottom:8}}>Number of Days</label>
         <input type="number" min={1} max={14} value={data.days} onChange={e=>save({...data,days:parseInt(e.target.value)||1})} style={{...inp,fontSize:20,padding:"14px 18px",width:100,textAlign:"center"}}/></div>
+      <div style={{...C,padding:20,marginBottom:14}}><label style={{fontSize:14,color:"#94A3B8",fontWeight:600,display:"block",marginBottom:8}}>Times each pair plays</label>
+        <p style={{fontSize:13,color:"#64748B",marginBottom:10,lineHeight:1.5}}>1 = single round-robin, 2 = home &amp; away (default), 3+ = more legs. Home/away alternates each leg.</p>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          <input type="number" min={1} max={6} value={data.legs||2} onChange={e=>setLegs(parseInt(e.target.value))} style={{...inp,fontSize:20,padding:"14px 18px",width:100,textAlign:"center"}}/>
+          <span style={{fontSize:14,color:"#64748B"}}>{generateFixtures(data.players,data.legs).length} total matches</span></div></div>
       <div style={{...C,padding:20,border:"1px solid rgba(239,68,68,0.2)"}}><p style={{fontSize:15,color:"#94A3B8",marginBottom:14}}>Deletes everything.</p>
         <Btn onClick={()=>{if(confirm("Reset EVERYTHING?"))save(DEF)}} color="#EF4444" bg="rgba(239,68,68,0.15)">🗑️ Reset Tournament</Btn></div>
       <div style={{...C,padding:20,marginTop:14}}><p style={{fontSize:14,color:"#64748B",marginBottom:8}}>Disconnect admin from this device:</p>
@@ -1466,7 +1484,7 @@ function App(){
         const loserId=r.p1Id===r.winnerId?r.p2Id:r.p1Id;
         setReveal({winner:d.players.find(p=>p.id===r.winnerId),loser:d.players.find(p=>p.id===loserId)});
       }
-      if(leagueDoneRef.current===null){const tot=generateFixtures(d.players||[]).length;leagueDoneRef.current=tot>0&&Object.keys(d.results||{}).length>=tot;}
+      if(leagueDoneRef.current===null){const tot=generateFixtures(d.players||[],d.legs).length;leagueDoneRef.current=tot>0&&Object.keys(d.results||{}).length>=tot;}
       setData({...DEF,...d});localRevRef.current=rev;setLastSync(Date.now());syncedRef.current=true;
     }catch(e){console.error("Load error:",e)}
   },[gistId,token,showToast]);
@@ -1495,7 +1513,7 @@ function App(){
   },[gistId,token]);
 
   const isAdmin=!!token;
-  const fixtures=useMemo(()=>generateFixtures(data.players),[data.players]);
+  const fixtures=useMemo(()=>generateFixtures(data.players,data.legs),[data.players,data.legs]);
   const gp=useCallback(id=>data.players.find(p=>p.id===id),[data.players]);
 
   // Celebrate when the final league match is played (fires once, for every viewer).
@@ -1517,7 +1535,7 @@ function App(){
 
   return<VideoCtx.Provider value={setIntro}><ImageCtx.Provider value={setPhoto}><div>
     <div style={{padding:"20px 20px 14px",background:"linear-gradient(180deg,rgba(251,191,36,0.1) 0%,transparent 100%)",borderBottom:"1px solid rgba(255,255,255,0.06)",display:"flex",alignItems:"center",gap:10,position:"sticky",top:0,zIndex:40,backdropFilter:"blur(12px)"}}>
-      {data.logo?<img src={data.logo} alt="" style={{width:40,height:40,objectFit:"contain",flexShrink:0}}/>:<span style={{fontSize:34}}>🎱</span>}<h1 style={{fontSize:28,fontWeight:400,color:"#FBBF24",fontFamily:"var(--hd)",letterSpacing:1.5,flex:1,lineHeight:1.05,textShadow:"0 2px 12px rgba(251,191,36,0.25)"}}>{data.tournamentName}</h1>
+      {data.logo?<img src={data.logo} alt="" style={{width:54,height:54,objectFit:"contain",flexShrink:0}}/>:<span style={{fontSize:44}}>🎱</span>}<h1 style={{fontSize:28,fontWeight:400,color:"#FBBF24",fontFamily:"var(--hd)",letterSpacing:1.5,flex:1,lineHeight:1.05,textShadow:"0 2px 12px rgba(251,191,36,0.25)"}}>{data.tournamentName}</h1>
       <button className="press" onClick={()=>setSplash(true)} title="Play intro" style={{background:"rgba(255,255,255,0.06)",border:"none",borderRadius:12,width:44,height:44,fontSize:20,cursor:"pointer",color:"#475569",flexShrink:0}}>🎬</button>
       <button className="press" onClick={toggleMusic} title={musicOn?"Music on":"Music off"} style={{background:"rgba(255,255,255,0.06)",border:"none",borderRadius:12,width:44,height:44,fontSize:20,cursor:"pointer",color:musicOn?"#FBBF24":"#475569",flexShrink:0}}>{musicOn?"🎵":"🎶"}</button>
       <button className="press" onClick={toggleSound} title={sound?"Sound on":"Sound off"} style={{background:"rgba(255,255,255,0.06)",border:"none",borderRadius:12,width:44,height:44,fontSize:20,cursor:"pointer",color:sound?"#FBBF24":"#475569",flexShrink:0}}>{sound?"🔊":"🔇"}</button>
