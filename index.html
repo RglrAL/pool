@@ -360,15 +360,19 @@ async function buildChampionCard(data,results,player,th){
   const table=getTable(data.players,results);const p=player||table[0];if(!p)return buildStandingsCard(data,results,th);
   const e=table.find(t=>t.id===p.id)||p;const pos=table.findIndex(t=>t.id===p.id)+1;
   const totalF=generateFixtures(data.players).length,played=Object.keys(results).length;const done=totalF>0&&played>=totalF;
-  const W=1080,H=1080;const{c,x}=newCard(W,H,th);
+  const W=1080,H=1240;const{c,x}=newCard(W,H,th);
   const logo=data.logo?await loadImg(data.logo):null;
-  cardTitle(x,W,data.tournamentName,done?"🏆 CHAMPION 🏆":pos===1?"👑 CURRENT LEADER":"PLAYER",th,logo);
+  cardTitle(x,W,data.tournamentName,done?"CHAMPION":pos===1?"CURRENT LEADER":"PLAYER",th,logo);
+  // Trophy: a soft gold glow behind a big 🏆 (browsers render the emoji in full colour on the share card).
+  const ty=logo?330:300;
+  const rg=x.createRadialGradient(W/2,ty,10,W/2,ty,180);rg.addColorStop(0,th.glow+"0.45)");rg.addColorStop(1,th.glow+"0)");x.fillStyle=rg;x.beginPath();x.arc(W/2,ty,180,0,7);x.fill();
+  x.textAlign="center";x.font="190px 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',serif";x.fillText("🏆",W/2,ty+66);
   const img=p.image?await loadImg(p.image):null;
-  drawAvatar(x,p,img,W/2,460,214,th.accent);
-  x.textAlign="center";x.fillStyle="#F8FAFC";x.font="88px 'Bebas Neue',sans-serif";x.fillText((p.name||"").slice(0,18),W/2,748);
-  x.fillStyle=th.accent;x.font="180px 'Bebas Neue',sans-serif";x.fillText(`${e.pts||0}`,W/2,900);
-  x.fillStyle="#94A3B8";x.font="600 34px 'DM Sans',sans-serif";x.fillText("POINTS",W/2,940);
-  x.fillStyle="#CBD5E1";x.font="600 36px 'DM Sans',sans-serif";x.fillText(`Won ${e.wins||0}  ·  Lost ${e.losses||0}  ·  Played ${e.played||0}`,W/2,1004);
+  drawAvatar(x,p,img,W/2,640,190,th.accent);
+  x.textAlign="center";x.fillStyle="#F8FAFC";x.font="84px 'Bebas Neue',sans-serif";x.fillText((p.name||"").slice(0,18),W/2,912);
+  x.fillStyle=th.accent;x.font="150px 'Bebas Neue',sans-serif";x.fillText(`${e.pts||0}`,W/2,1056);
+  x.fillStyle="#94A3B8";x.font="600 32px 'DM Sans',sans-serif";x.fillText("POINTS",W/2,1094);
+  x.fillStyle="#CBD5E1";x.font="600 34px 'DM Sans',sans-serif";x.fillText(`Won ${e.wins||0}  ·  Lost ${e.losses||0}  ·  Played ${e.played||0}`,W/2,1156);
   cardFooter(x,W,H);return c;
 }
 async function buildPlayerCard(data,results,player,th){
@@ -947,10 +951,11 @@ function FixturesScreen({data,players,results,fixtures,gp,onTap}){const[filter,s
         {unscheduled.length>0&&<div style={{marginBottom:20}}><div style={{fontSize:16,fontWeight:800,color:"#64748B",fontFamily:"var(--hd)",letterSpacing:1,marginBottom:10,textTransform:"uppercase"}}>Unscheduled</div>{unscheduled.map(f=><FixtureCard key={f.id} f={f} data={data} gp={gp} results={results} onTap={onTap}/>)}</div>}
       </div>}</div>;}
 
-function BracketCell({m,gp,onTap}){const win=m.win;
-  const row=pid=>{const p=gp(pid);const isWin=win&&pid===win;
-    return<div onClick={()=>p&&onTap&&onTap(p)} style={{flex:1,display:"flex",alignItems:"center",gap:9,padding:"0 9px",background:isWin?"rgba(34,197,94,0.14)":"transparent",borderRadius:8,cursor:p?"pointer":"default",minWidth:0}}>
-      {p?<Av p={p} size={46} ring={isWin?"green":undefined}/>:<div style={{width:46,height:46,borderRadius:"50%",background:"rgba(255,255,255,0.05)",flexShrink:0}}/>}
+function BracketCell({m,gp,onTap,seedOf}){const win=m.win;
+  const row=pid=>{const p=gp(pid);const isWin=win&&pid===win;const seed=p&&seedOf?seedOf(pid):null;
+    return<div onClick={()=>p&&onTap&&onTap(p)} style={{flex:1,display:"flex",alignItems:"center",gap:8,padding:"0 9px",background:isWin?"rgba(34,197,94,0.14)":"transparent",borderRadius:8,cursor:p?"pointer":"default",minWidth:0}}>
+      {seed?<span title={`Seed #${seed}`} style={{fontSize:11,fontWeight:800,color:isWin?"#0B1120":"#0B1120",background:isWin?"#22C55E":"#FBBF24",borderRadius:"50%",width:18,height:18,minWidth:18,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"var(--hd)",flexShrink:0}}>{seed}</span>:<span style={{width:18,flexShrink:0}}/>}
+      {p?<Av p={p} size={44} ring={isWin?"green":undefined}/>:<div style={{width:44,height:44,borderRadius:"50%",background:"rgba(255,255,255,0.05)",flexShrink:0}}/>}
       <span style={{flex:1,minWidth:0,fontSize:14,fontWeight:isWin?800:500,color:isWin?"#22C55E":p?"#E2E8F0":"#475569",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p?.name||"—"}</span>
       {isWin&&<span style={{fontSize:14,flexShrink:0}}>🏆</span>}</div>;};
   return<div style={{height:"100%",background:"rgba(255,255,255,0.05)",border:`1px solid ${win?"rgba(251,191,36,0.3)":"rgba(255,255,255,0.09)"}`,borderRadius:12,padding:4,display:"flex",flexDirection:"column",boxShadow:"0 6px 16px rgba(0,0,0,0.3)"}}>
@@ -959,7 +964,7 @@ function BracketCell({m,gp,onTap}){const win=m.win;
     {row(m.p2)}</div>;}
 
 // Horizontal bracket with exact geometry + SVG elbow connectors — reads as a real bracket, scrolls on mobile.
-function BracketView({rounds,gp,onTap}){
+function BracketView({rounds,gp,onTap,seedOf}){
   if(!rounds.length)return null;
   const CW=176,CH=106,CG=38,G0=20,LBL=30;
   const n0=rounds[0].length;
@@ -983,7 +988,7 @@ function BracketView({rounds,gp,onTap}){
         <path d={lines.join(" ")} fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth="2" strokeLinecap="round"/></svg>
       {rounds.map((rd,r)=><div key={r} style={{position:"absolute",top:6,left:xL(r),width:CW,textAlign:"center",fontSize:12,fontWeight:800,color:"#64748B",fontFamily:"var(--hd)",letterSpacing:1.5,textTransform:"uppercase"}}>{roundName(rd.length)}</div>)}
       <div style={{position:"absolute",top:6,left:xL(champCol),width:CW,textAlign:"center",fontSize:12,fontWeight:800,color:"#FBBF24",fontFamily:"var(--hd)",letterSpacing:1.5,textTransform:"uppercase"}}>Champion</div>
-      {rounds.map((rd,r)=>rd.map((m,i)=><div key={m.id} style={{position:"absolute",left:xL(r),top:centers[r][i]-CH/2,width:CW,height:CH}}><BracketCell m={m} gp={gp} onTap={onTap}/></div>))}
+      {rounds.map((rd,r)=>rd.map((m,i)=><div key={m.id} style={{position:"absolute",left:xL(r),top:centers[r][i]-CH/2,width:CW,height:CH}}><BracketCell m={m} gp={gp} onTap={onTap} seedOf={seedOf}/></div>))}
       <div style={{position:"absolute",left:xL(champCol),top:finalY-CH/2,width:CW,height:CH}}>
         <div onClick={()=>champP&&onTap&&onTap(champP)} style={{height:"100%",borderRadius:14,border:"1.5px solid rgba(251,191,36,0.55)",background:"linear-gradient(160deg,rgba(251,191,36,0.22),rgba(251,191,36,0.04))",display:"flex",alignItems:"center",gap:10,padding:"0 12px",cursor:champP?"pointer":"default",boxShadow:"0 8px 22px rgba(251,191,36,0.18)",animation:champP?"glow 2.6s infinite":"none"}}>
           <span style={{fontSize:26,flexShrink:0}}>🏆</span>
@@ -993,15 +998,16 @@ function BracketView({rounds,gp,onTap}){
 }
 
 // Vertical bracket — rounds stacked top→bottom, easier to read on a narrow phone.
-function BracketList({rounds,gp,onTap}){const last=rounds.length-1;const champ=rounds[last][0]?.win;const champP=champ?gp(champ):null;
+function BracketList({rounds,gp,onTap,seedOf}){const last=rounds.length-1;const champ=rounds[last][0]?.win;const champP=champ?gp(champ):null;
   return<div>{rounds.map((rd,ri)=><div key={ri} style={{marginBottom:16}}>
     <div style={{fontSize:15,fontWeight:800,color:"#94A3B8",fontFamily:"var(--hd)",letterSpacing:2,textTransform:"uppercase",marginBottom:10}}>{roundName(rd.length)}</div>
-    {rd.map(m=><div key={m.id} style={{height:108,marginBottom:10}}><BracketCell m={m} gp={gp} onTap={onTap}/></div>)}</div>)}
+    {rd.map(m=><div key={m.id} style={{height:108,marginBottom:10}}><BracketCell m={m} gp={gp} onTap={onTap} seedOf={seedOf}/></div>)}</div>)}
     {champP&&<div onClick={()=>onTap&&onTap(champP)} style={{...C,display:"flex",alignItems:"center",gap:12,padding:"14px 16px",cursor:"pointer",border:"1.5px solid rgba(251,191,36,0.5)",background:"linear-gradient(160deg,rgba(251,191,36,0.2),rgba(251,191,36,0.03))",animation:"glow 2.6s infinite"}}>
       <span style={{fontSize:26}}>🏆</span><Av p={champP} size={64} ring="gold"/><div style={{flex:1,minWidth:0}}><div style={{fontSize:12,color:"#FBBF24",fontWeight:800,letterSpacing:1.5,fontFamily:"var(--hd)"}}>CHAMPION</div><div style={{fontSize:20,fontWeight:800,color:"#F8FAFC",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{champP.name}</div></div></div>}
   </div>;}
 
 function BracketScreen({data,gp,onTap}){const po=data.playoffs;const{rounds,champion}=buildBracket(po);
+  const seedOf=id=>{const idx=(po.seeds||[]).indexOf(id);return idx>=0?idx+1:null};
   const[layout,setLayout]=useState("bracket");
   const champRef=useRef(false);
   useEffect(()=>{if(champion&&!champRef.current){champRef.current=true;fireConfetti()}if(!champion)champRef.current=false},[champion]);
@@ -1018,7 +1024,7 @@ function BracketScreen({data,gp,onTap}){const po=data.playoffs;const{rounds,cham
       <div style={{fontSize:34,fontWeight:900,color:"#F8FAFC",marginTop:14,fontFamily:"var(--hd)",letterSpacing:1}}>{champ.name}</div>
       <div style={{fontSize:14,color:"#94A3B8",marginTop:6,marginBottom:16,fontWeight:500}}>Tap to celebrate again 🎉</div>
       <div onClick={e=>e.stopPropagation()} style={{display:"flex",justifyContent:"center"}}><ShareBtn data={data} results={data.results} opts={{mode:"champion",player:champ}} label="📸 Share Champion"/></div></div>}
-    {layout==="bracket"?<BracketView rounds={rounds} gp={gp} onTap={onTap}/>:<BracketList rounds={rounds} gp={gp} onTap={onTap}/>}</div>;}
+    {layout==="bracket"?<BracketView rounds={rounds} gp={gp} onTap={onTap} seedOf={seedOf}/>:<BracketList rounds={rounds} gp={gp} onTap={onTap} seedOf={seedOf}/>}</div>;}
 
 // Mini line chart of a player's league position after each of their matches (rank 1 = top).
 function Timeline({player,players,results}){
