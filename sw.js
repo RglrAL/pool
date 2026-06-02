@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pool-tournament-v2';
+const CACHE_NAME = 'pool-tournament-v4';
 const ASSETS = [
   '/',
   '/index.html',
@@ -24,27 +24,19 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = e.request.url;
 
-  // NEVER cache the GitHub API or non-GET requests — this data must always be live.
-  // (Caching it was why the 30s refresh did nothing and added players "disappeared".)
-  if (e.request.method !== 'GET' || url.includes('api.github.com')) return;
+  // NEVER cache the live tournament data (GitHub API or the raw-gist CDN) or non-GET requests —
+  // it must always be fresh. (Caching it was why refreshes did nothing and players "disappeared".)
+  if (e.request.method !== 'GET' || url.includes('api.github.com') || url.includes('gist.githubusercontent.com')) return;
 
-  // Network-first for CDN resources (keep them fresh, fall back to cache offline)
-  if (url.includes('cdnjs.cloudflare.com') || url.includes('fonts.googleapis.com') || url.includes('fonts.gstatic.com')) {
-    e.respondWith(
-      fetch(e.request).then(r => {
-        const clone = r.clone();
-        caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
-        return r;
-      }).catch(() => caches.match(e.request))
-    );
-  } else {
-    // Cache-first for the local app shell only
-    e.respondWith(
-      caches.match(e.request).then(r => r || fetch(e.request).then(resp => {
-        const clone = resp.clone();
-        caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
-        return resp;
-      }))
-    );
-  }
+  // Network-first for everything (CDN libs AND the local app shell): always serve the
+  // freshest app/index.html when online, falling back to cache only when offline.
+  // (Cache-first on the app shell meant redeploys never reached installed devices —
+  // e.g. new features like the admin lock button silently never appeared.)
+  e.respondWith(
+    fetch(e.request).then(resp => {
+      const clone = resp.clone();
+      caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
+      return resp;
+    }).catch(() => caches.match(e.request))
+  );
 });
