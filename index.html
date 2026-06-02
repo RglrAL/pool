@@ -603,11 +603,12 @@ function ShareModal({data,results,opts,onClose}){
 // Fullscreen celebration shown to the admin the moment a result is recorded.
 function ResultReveal({reveal,onClose}){
   const{winner,loser}=reveal;const hasVid=!!winner?.video;
-  useEffect(()=>{playSound("win");try{navigator.vibrate?.([25,40,25])}catch(e){}const t=setTimeout(onClose,hasVid?7000:2800);return()=>clearTimeout(t)},[]);
+  // No synth sting when there's a video — the intro plays with its own sound. Close when the clip ends (with a safety cap).
+  useEffect(()=>{if(!hasVid)playSound("win");try{navigator.vibrate?.([25,40,25])}catch(e){}const t=setTimeout(onClose,hasVid?15000:2800);return()=>clearTimeout(t)},[]);
   return<div onClick={onClose} style={{position:"fixed",inset:0,zIndex:400,background:"rgba(2,6,15,0.92)",backdropFilter:"blur(10px)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,animation:"fadeIn .2s",cursor:"pointer",padding:20}}>
     <div style={{fontSize:18,fontWeight:800,letterSpacing:6,color:"#FBBF24",fontFamily:"var(--hd)",animation:"rise .4s both",animationDelay:".12s"}}>🏆 WINNER</div>
     {hasVid
-      ?<div style={{margin:"18px 0",width:260,height:260,borderRadius:"50%",overflow:"hidden",border:"4px solid #FBBF24",boxShadow:"0 0 40px rgba(251,191,36,0.5)",animation:"slam .6s cubic-bezier(.2,1.3,.4,1) both"}}><video src={winner.video} poster={vidPoster(winner)} autoPlay muted loop playsInline style={{width:"100%",height:"100%",objectFit:"cover"}}/></div>
+      ?<div style={{margin:"18px 0",width:330,height:330,borderRadius:"50%",overflow:"hidden",border:"5px solid #FBBF24",boxShadow:"0 0 55px rgba(251,191,36,0.6)",animation:"slam .6s cubic-bezier(.2,1.3,.4,1) both"}}><video src={winner.video} poster={vidPoster(winner)} autoPlay playsInline onEnded={onClose} style={{width:"100%",height:"100%",objectFit:"cover"}}/></div>
       :<div style={{margin:"18px 0",animation:"slam .6s cubic-bezier(.2,1.3,.4,1) both"}}><Av p={winner} size={200} ring="gold" noTap/></div>}
     <div style={{fontSize:50,fontWeight:900,color:"#F8FAFC",fontFamily:"var(--hd)",letterSpacing:1,animation:"rise .4s both",animationDelay:".25s"}}>{winner?.name}</div>
     {loser&&<div style={{fontSize:18,color:"#94A3B8",fontWeight:600,marginTop:8,animation:"rise .4s both",animationDelay:".4s"}}>def. {loser.name}</div>}
@@ -1333,12 +1334,18 @@ function App(){
   const loginAdmin=tok=>{setToken(tok);localStorage.setItem(TOKEN_KEY,tok);setShowLogin(false);showToast("🔓 Logged in as admin")};
   const[sound,setSound]=useState(window.__poolSound);
   const toggleSound=()=>{const v=!window.__poolSound;window.__poolSound=v;localStorage.setItem("pool-sound",v?"1":"0");setSound(v);if(v){try{_actx().resume&&_actx().resume();playSound("win")}catch(e){}}};
-  // ─── Background music: optional looping track (admin URL or bundled default), starts on tap, ducks under intros ───
-  const musicRef=useRef(null);if(!musicRef.current){const a=new Audio();a.loop=true;a.volume=0.18;musicRef.current=a;}
+  // ─── Background music: optional looping track (admin URL or bundled default). Starts on a tap (autoplay
+  //     rules); the icon reflects real playback, and a tap that can't play explains why (missing file vs autoplay). ───
+  const musicRef=useRef(null);if(!musicRef.current){const a=new Audio();a.loop=true;a.volume=0.18;a.preload="auto";musicRef.current=a;}
   const[musicOn,setMusicOn]=useState(localStorage.getItem("pool-music")==="1");
   const musicSrc=data.music||DEFAULT_MUSIC;
-  const toggleMusic=()=>{const v=!musicOn;setMusicOn(v);localStorage.setItem("pool-music",v?"1":"0");const a=musicRef.current;if(v){if(a.getAttribute("src")!==musicSrc)a.src=musicSrc;a.play().catch(()=>{})}else a.pause();};
-  useEffect(()=>{const a=musicRef.current;if(!musicOn)return;if(a.getAttribute("src")!==musicSrc)a.src=musicSrc;a.play().catch(()=>{})},[musicSrc,musicOn]);
+  const playMusic=()=>{const a=musicRef.current;if(a.getAttribute("src")!==musicSrc)a.src=musicSrc;return a.play();};
+  const toggleMusic=()=>{const a=musicRef.current;
+    if(!musicOn){playMusic().then(()=>{setMusicOn(true);localStorage.setItem("pool-music","1")})
+      .catch(()=>showToast(a.error?("⚠️ Music file not found — is it at "+musicSrc+" ?"):"Tap 🎵 once more to start the music"));}
+    else{a.pause();setMusicOn(false);localStorage.setItem("pool-music","0")}};
+  // Resume on load / when the track changes if music was left on; if the browser blocks it, show the icon as off.
+  useEffect(()=>{if(!musicOn)return;playMusic().catch(()=>setMusicOn(false))},[musicSrc]);
   // Duck the music whenever a non-muted video plays anywhere (intros/reels). Capture phase catches non-bubbling media events.
   // Recompute from the live DOM on each event rather than counting (play/playing can both fire) so the volume can't desync.
   useEffect(()=>{const a=musicRef.current;
