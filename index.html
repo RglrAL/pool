@@ -140,7 +140,16 @@ const gist={
     if(!r.ok)throw new Error(`Could not load gist (${r.status})`);
     const newEtag=r.headers.get("ETag");
     const g=await r.json();
-    return{data:JSON.parse(g.files[GIST_FILE].content),etag:newEtag};
+    // owner lets viewers switch to the un-rate-limited raw CDN for subsequent polls.
+    return{data:JSON.parse(g.files[GIST_FILE].content),etag:newEtag,owner:g.owner&&g.owner.login};
+  },
+  // The raw gist CDN (gist.githubusercontent.com) serves the latest file with NO API rate limit,
+  // so a roomful of viewers on one WiFi can all poll freely. Cache-bust keeps it live-fresh.
+  rawUrl(gistId,owner){return `https://gist.githubusercontent.com/${owner}/${gistId}/raw/${GIST_FILE}`;},
+  async loadRaw(rawUrl){
+    const r=await fetch(`${rawUrl}?t=${Date.now()}`,{cache:"no-store"});
+    if(!r.ok)throw new Error(`raw ${r.status}`);
+    return JSON.parse(await r.text());
   },
   async save(gistId,token,data){
     const r=await fetch(`https://api.github.com/gists/${gistId}`,{method:"PATCH",
@@ -1322,6 +1331,7 @@ function App(){
   const savingRef=useRef(false);   // true while a save is in flight — pause polling
   const localRevRef=useRef(0);     // newest revision we've applied locally
   const etagRef=useRef(null);      // last gist ETag, for conditional polling
+  const ownerRef=useRef(null);     // gist owner login → enables rate-limit-free raw-CDN polling
   const dataRef=useRef(data);      // latest data, for diffing on poll
   const syncedRef=useRef(false);   // we've applied at least one load (suppress first-load toast)
   const leagueDoneRef=useRef(null);// null until first load; then tracks league-complete state
@@ -1361,7 +1371,7 @@ function App(){
     const params=new URLSearchParams(location.search);
     const id=params.get("gist");
     const savedToken=localStorage.getItem(TOKEN_KEY);
-    if(id){setGistId(id);setToken(savedToken);setReady(true)}
+    if(id){ownerRef.current=localStorage.getItem("pool-owner-"+id)||null;setGistId(id);setToken(savedToken);setReady(true)}
     else if(savedToken){setToken(savedToken);setReady(false)}
     else{setReady(false)}
     setLoading(false);
@@ -1371,12 +1381,23 @@ function App(){
   const loadData=useCallback(async()=>{
     if(!gistId||savingRef.current)return;        // don't clobber an in-flight save
     try{
-      const res=await gist.load(gistId,etagRef.current,token);  // token (if admin) → 5,000/hr instead of 60/hr
-      if(res.notModified)return;                  // 304 — nothing changed, cheap
-      etagRef.current=res.etag;
-      const d=res.data;
+      let d;
+      // Prefer the raw CDN (no API rate limit) once we know the owner — this is what lets a
+      // roomful of viewers on one WiFi all stay live without tripping GitHub's 60/hr limit.
+      if(ownerRef.current){
+        try{d=await gist.loadRaw(gist.rawUrl(gistId,ownerRef.current));}catch(e){d=null;}
+      }
+      if(!d){
+        const res=await gist.load(gistId,etagRef.current,token);  // token (if admin) → 5,000/hr instead of 60/hr
+        if(res.notModified)return;                // 304 — nothing changed, cheap
+        etagRef.current=res.etag;
+        if(res.owner){ownerRef.current=res.owner;localStorage.setItem("pool-owner-"+gistId,res.owner);}
+        d=res.data;
+      }
       const rev=d.updatedAt||0;
       if(savingRef.current)return;                // a save started while we were fetching
+      // Skip re-applying data we already have (raw polling has no 304), but always apply the first load.
+      if(syncedRef.current&&rev&&rev<=localRevRef.current)return;
       if(rev<localRevRef.current)return;          // ignore stale reads that would revert us
       // A brand-new result arrived from someone else (live) — give viewers the reveal too.
       const prev=dataRef.current;
