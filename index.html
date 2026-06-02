@@ -52,6 +52,9 @@ button:active{transform:scale(.94)}
 .stagger>*:nth-child(4){animation-delay:.14s}.stagger>*:nth-child(5){animation-delay:.18s}.stagger>*:nth-child(6){animation-delay:.22s}
 .stagger>*:nth-child(7){animation-delay:.26s}.stagger>*:nth-child(8){animation-delay:.30s}.stagger>*:nth-child(n+9){animation-delay:.34s}
 #root{max-width:680px;margin:0 auto;min-height:100vh;position:relative}
+@keyframes sweep{0%{transform:translateX(-120%) skewX(-18deg);opacity:0}30%{opacity:.9}100%{transform:translateX(220%) skewX(-18deg);opacity:0}}
+@keyframes kenburns{0%{transform:scale(1.18)}100%{transform:scale(1.32)}}
+@keyframes introName{0%{transform:translateY(28px);opacity:0;letter-spacing:0}100%{transform:translateY(0);opacity:1;letter-spacing:2px}}
 @media (prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}}
 </style>
 </head>
@@ -219,7 +222,7 @@ async function decryptToken(auth,password){ // throws if the password is wrong (
 
 /* ═══ DATA DEFAULTS & HELPERS ═══ */
 // Bundled fallback background track; admin can override with any URL via Settings (data.music).
-const DEFAULT_MUSIC="/media/BBC%20Snooker%20Titles%202024.mp3";
+const DEFAULT_MUSIC="/media/loopy.mp3";
 const DEF={tournamentName:"Pool Tournament 2026",days:5,players:[],results:{},schedule:{},dayDates:{},dayLabels:{},matchTimes:{},music:"",auth:null,playoffs:{enabled:false,size:4,seeds:[],matches:{}}};
 
 function generateFixtures(players){
@@ -624,6 +627,51 @@ function ResultReveal({reveal,onClose}){
     <div style={{fontSize:13,color:"#475569",marginTop:26,animation:"fadeIn .5s both",animationDelay:"1s"}}>tap to dismiss</div></div>;
 }
 
+// ═══ BROADCAST INTRO — cold-open title → snappy muted player walkouts (leader last) → into the app.
+//     Theme music carries the audio (videos are muted); tap advances, Skip exits. ═══
+function Intro({data,players,results,onDone}){
+  const table=useMemo(()=>getTable(players,results),[players,results]);
+  const steps=useMemo(()=>{
+    const s=[{t:"open",dur:2400}];
+    [...table].reverse().forEach(p=>s.push({t:"player",p,dur:1600})); // build up to #1
+    s.push({t:"go",dur:1400});
+    return s;
+  },[table]);
+  const[i,setI]=useState(0);
+  useEffect(()=>{if(i>=steps.length){onDone();return}const t=setTimeout(()=>setI(v=>v+1),steps[i].dur);return()=>clearTimeout(t)},[i,steps]);
+  const step=steps[i]||{t:"go"};
+  const posOf=p=>table.findIndex(t=>t.id===p.id)+1;
+  const ptsOf=p=>{const e=table.find(t=>t.id===p.id);return e?e.pts:0};
+  const sweep=<div style={{position:"absolute",top:0,bottom:0,left:0,width:"55%",background:"linear-gradient(90deg,transparent,rgba(251,191,36,0.5),transparent)",animation:"sweep 1.1s ease-out",pointerEvents:"none"}}/>;
+  return<Portal><div onClick={()=>setI(v=>v+1)} style={{position:"fixed",inset:0,zIndex:6000,background:"#06080F",overflow:"hidden",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",animation:"fadeIn .25s"}}>
+    <div style={{position:"absolute",inset:0,background:"radial-gradient(circle at 50% 36%,rgba(251,191,36,0.16),transparent 60%)"}}/>
+    {step.t==="open"&&<div key="open" style={{position:"relative",textAlign:"center",width:"100%",padding:20}}>
+      {sweep}
+      {data.logo&&<img src={data.logo} alt="" style={{width:84,height:84,objectFit:"contain",margin:"0 auto 14px",display:"block",animation:"popIn .5s both"}}/>}
+      <div style={{fontSize:"min(15vw,76px)",lineHeight:.95,fontWeight:400,color:"#FBBF24",fontFamily:"var(--hd)",letterSpacing:2,textShadow:"0 4px 40px rgba(251,191,36,0.5)",animation:"slam .7s cubic-bezier(.2,1.3,.4,1) both",padding:"0 10px"}}>{(data.tournamentName||"Pool Tournament").toUpperCase()}</div>
+      <div style={{height:3,width:150,margin:"18px auto 0",background:"linear-gradient(90deg,transparent,#FBBF24,transparent)",animation:"fadeIn .6s both",animationDelay:".45s"}}/>
+      <div className="stagger" style={{display:"flex",justifyContent:"center",gap:8,marginTop:26,flexWrap:"wrap",maxWidth:360,marginLeft:"auto",marginRight:"auto"}}>
+        {players.slice(0,8).map(p=><Av key={p.id} p={p} size={44} ring="gold" noTap/>)}</div>
+    </div>}
+    {step.t==="player"&&(()=>{const p=step.p,r=posOf(p),poster=vidPoster(p);return<div key={p.id} style={{position:"absolute",inset:0}}>
+      {p.video
+        ?<video key={p.id} src={p.video} poster={poster} autoPlay muted playsInline style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",animation:"kenburns 1.9s linear both"}}/>
+        :poster?<div style={{position:"absolute",inset:0,backgroundImage:`url(${poster})`,backgroundSize:"cover",backgroundPosition:"center",animation:"kenburns 1.9s linear both"}}/>
+        :<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}}><Av p={p} size={200} ring="gold" noTap/></div>}
+      <div style={{position:"absolute",inset:0,background:"linear-gradient(180deg,rgba(6,8,15,0.45) 0%,transparent 28%,transparent 52%,rgba(6,8,15,0.94) 100%)"}}/>
+      {sweep}
+      <div style={{position:"absolute",left:22,right:22,bottom:"12%"}}>
+        {r>0&&<div style={{fontSize:15,fontWeight:800,letterSpacing:3,color:"#FBBF24",fontFamily:"var(--hd)",marginBottom:6,animation:"slideInL .4s both"}}>#{r} · {ptsOf(p)} PTS</div>}
+        <div style={{fontSize:"min(16vw,72px)",lineHeight:.95,fontWeight:900,color:"#F8FAFC",fontFamily:"var(--hd)",textShadow:"0 3px 24px rgba(0,0,0,0.85)",animation:"introName .5s cubic-bezier(.2,1,.36,1) both"}}>{(p.name||"").toUpperCase()}</div>
+      </div></div>})()}
+    {step.t==="go"&&<div key="go" style={{position:"relative",textAlign:"center"}}>{sweep}
+      <div style={{fontSize:"min(18vw,90px)",fontWeight:400,color:"#FBBF24",fontFamily:"var(--hd)",letterSpacing:3,textShadow:"0 4px 40px rgba(251,191,36,0.5)",animation:"slam .6s cubic-bezier(.2,1.3,.4,1) both"}}>LET'S PLAY</div></div>}
+    <div style={{position:"fixed",top:14,left:0,right:0,display:"flex",justifyContent:"center",gap:6,zIndex:2,padding:"0 20px"}}>
+      {steps.map((s,k)=><div key={k} style={{width:k===i?20:7,height:4,borderRadius:4,background:k<=i?"#FBBF24":"rgba(255,255,255,0.22)",transition:"all .3s"}}/>)}</div>
+    <button onClick={e=>{e.stopPropagation();onDone()}} style={{position:"fixed",bottom:26,right:20,background:"rgba(255,255,255,0.12)",border:"none",color:"#fff",fontSize:14,fontWeight:700,padding:"10px 18px",borderRadius:22,cursor:"pointer",fontFamily:"var(--bd)",backdropFilter:"blur(6px)",zIndex:2}}>Skip ▸</button>
+  </div></Portal>;
+}
+
 // Broadcast-style auto-scrolling ticker of recent results (seamless loop via duplicated content).
 function Ticker({items}){
   if(!items.length)return null;const dur=Math.max(16,items.length*4.5);
@@ -811,23 +859,6 @@ function Home({data,players,results,fixtures,gp,onNav,onTap}){
         {stats.byStreak&&<StatCard label="🔥 Hot Streak" player={stats.byStreak} value={stats.byStreak.streak} sub="in a row" onTap={onTap}/>}
       </div></div>}
 
-    {table.length>0&&<div style={C}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-      <span style={{fontSize:20,fontWeight:400,color:"#F8FAFC",fontFamily:"var(--hd)",letterSpacing:1.5}}>STANDINGS</span>
-      <button onClick={()=>onNav("table")} style={{background:"none",border:"none",color:"#FBBF24",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"var(--bd)",padding:"8px 0"}}>See All →</button></div>
-      {table.slice(0,5).map((p,i)=><div key={p.id} style={{display:"flex",alignItems:"center",gap:13,padding:"12px 0",borderTop:i>0?"1px solid rgba(255,255,255,0.06)":"none",cursor:"pointer"}} onClick={()=>onTap(p)}>
-        <span style={{width:26,fontSize:18,fontWeight:800,color:i===0?"#FBBF24":i<3?"#CBD5E1":"#475569",textAlign:"center",fontFamily:"var(--hd)"}}>{i+1}</span>
-        <Av p={p} size={78} ring={i===0?"gold":i===1?"silver":i===2?"bronze":undefined}/><div style={{flex:1,minWidth:0}}><div style={{fontSize:17,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div><div style={{fontSize:13,color:"#64748B",marginTop:1}}>W{p.wins} · L{p.losses}</div></div>
-        <div style={{fontSize:30,fontWeight:900,color:"#FBBF24",fontFamily:"var(--hd)"}}>{p.pts}</div></div>)}</div>}
-
-    {(()=>{const rt=todayDayIndex(data);const td=rt!=null?String(rt):Object.keys(data.schedule).find(d=>(data.schedule[d]||[]).some(id=>!results[id]));if(td==null||td===undefined)return null;
-      const ids=data.schedule[td]||[];const tdf=ids.map(id=>fixtures.find(f=>f.id===id)).filter(Boolean);if(!tdf.length)return null;
-      return<div style={C}><div style={{marginBottom:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}><DH data={data} d={parseInt(td)}/>{rt!=null&&<span style={{fontSize:11,fontWeight:800,letterSpacing:1.5,color:"#0B1120",background:"#FBBF24",padding:"3px 10px",borderRadius:20,fontFamily:"var(--hd)"}}>TODAY</span>}</div>
-        {tdf.map((f,i)=>{const p1=gp(f.p1),p2=gp(f.p2),r=results[f.id],time=data.matchTimes?.[f.id];
-          return<div key={f.id} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 0",borderTop:i>0?"1px solid rgba(255,255,255,0.05)":"none"}}>
-            {time&&<span style={{fontSize:13,color:"#64748B",fontWeight:600,width:48,flexShrink:0}}>{time}</span>}
-            <div onClick={()=>p1&&onTap(p1)} style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}><Flip trigger={r?r.winnerId:"_"}><Av p={p1} size={62}/></Flip><span style={{minWidth:0,fontSize:15,fontWeight:r?.winnerId===p1?.id?700:500,color:r?.winnerId===p1?.id?"#22C55E":"#CBD5E1",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p1?.name}</span></div>
-            <Score r={r} vsStyle={{fontSize:14,color:"#475569",fontWeight:700,padding:"0 6px"}} vsText="vs"/>
-            <div onClick={()=>p2&&onTap(p2)} style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:10,justifyContent:"flex-end",cursor:"pointer"}}><span style={{minWidth:0,fontSize:15,textAlign:"right",fontWeight:r?.winnerId===p2?.id?700:500,color:r?.winnerId===p2?.id?"#22C55E":"#CBD5E1",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p2?.name}</span><Flip trigger={r?r.winnerId:"_"}><Av p={p2} size={62}/></Flip></div></div>})}</div>})()}
   </div>;
 }
 
@@ -1341,6 +1372,8 @@ function App(){
   const[intro,setIntro]=useState(null);
   const[photo,setPhoto]=useState(null);
   const[showLogin,setShowLogin]=useState(false);
+  const[splash,setSplash]=useState(false);   // broadcast intro overlay
+  const splashDoneRef=useRef(false);
   const loginAdmin=tok=>{setToken(tok);localStorage.setItem(TOKEN_KEY,tok);setShowLogin(false);showToast("🔓 Logged in as admin")};
   const[sound,setSound]=useState(window.__poolSound);
   const toggleSound=()=>{const v=!window.__poolSound;window.__poolSound=v;localStorage.setItem("pool-sound",v?"1":"0");setSound(v);if(v){try{_actx().resume&&_actx().resume();playSound("win")}catch(e){}}};
@@ -1356,6 +1389,10 @@ function App(){
     else{a.pause();setMusicOn(false);localStorage.setItem("pool-music","0")}};
   // Resume on load / when the track changes if music was left on; if the browser blocks it, show the icon as off.
   useEffect(()=>{if(!musicOn)return;playMusic().catch(()=>setMusicOn(false))},[musicSrc]);
+  // Broadcast intro: play once per browser session, the first time players are loaded. Replay via the 🎬 header button.
+  useEffect(()=>{if(splashDoneRef.current||!ready)return;if((data.players||[]).length&&!sessionStorage.getItem("pool-intro-seen")){splashDoneRef.current=true;sessionStorage.setItem("pool-intro-seen","1");setSplash(true)}},[ready,data.players]);
+  // Theme music carries the intro. Start it when the intro opens; if autoplay is blocked, kick off on the first tap.
+  useEffect(()=>{if(!splash)return;playMusic().then(()=>setMusicOn(true)).catch(()=>{const go=()=>{playMusic().then(()=>setMusicOn(true)).catch(()=>{})};document.addEventListener("pointerdown",go,{once:true});return()=>document.removeEventListener("pointerdown",go)})},[splash]);
   // Duck the music whenever a non-muted video plays anywhere (intros/reels). Capture phase catches non-bubbling media events.
   // Recompute from the live DOM on each event rather than counting (play/playing can both fire) so the volume can't desync.
   useEffect(()=>{const a=musicRef.current;
@@ -1460,6 +1497,7 @@ function App(){
   return<VideoCtx.Provider value={setIntro}><ImageCtx.Provider value={setPhoto}><div>
     <div style={{padding:"20px 20px 14px",background:"linear-gradient(180deg,rgba(251,191,36,0.1) 0%,transparent 100%)",borderBottom:"1px solid rgba(255,255,255,0.06)",display:"flex",alignItems:"center",gap:10,position:"sticky",top:0,zIndex:40,backdropFilter:"blur(12px)"}}>
       {data.logo?<img src={data.logo} alt="" style={{width:40,height:40,objectFit:"contain",flexShrink:0}}/>:<span style={{fontSize:34}}>🎱</span>}<h1 style={{fontSize:28,fontWeight:400,color:"#FBBF24",fontFamily:"var(--hd)",letterSpacing:1.5,flex:1,lineHeight:1.05,textShadow:"0 2px 12px rgba(251,191,36,0.25)"}}>{data.tournamentName}</h1>
+      <button className="press" onClick={()=>setSplash(true)} title="Play intro" style={{background:"rgba(255,255,255,0.06)",border:"none",borderRadius:12,width:44,height:44,fontSize:20,cursor:"pointer",color:"#475569",flexShrink:0}}>🎬</button>
       <button className="press" onClick={toggleMusic} title={musicOn?"Music on":"Music off"} style={{background:"rgba(255,255,255,0.06)",border:"none",borderRadius:12,width:44,height:44,fontSize:20,cursor:"pointer",color:musicOn?"#FBBF24":"#475569",flexShrink:0}}>{musicOn?"🎵":"🎶"}</button>
       <button className="press" onClick={toggleSound} title={sound?"Sound on":"Sound off"} style={{background:"rgba(255,255,255,0.06)",border:"none",borderRadius:12,width:44,height:44,fontSize:20,cursor:"pointer",color:sound?"#FBBF24":"#475569",flexShrink:0}}>{sound?"🔊":"🔇"}</button>
       {!isAdmin&&data.auth&&<button className="press" onClick={()=>setShowLogin(true)} title="Admin login" style={{background:"rgba(255,255,255,0.06)",border:"none",borderRadius:12,width:44,height:44,fontSize:20,cursor:"pointer",color:"#475569",flexShrink:0}}>🔒</button>}</div>
@@ -1486,6 +1524,7 @@ function App(){
     {intro&&<VideoModal src={intro.video} poster={vidPoster(intro)} name={intro.name} onClose={()=>setIntro(null)}/>}
     {photo&&<ImageModal p={photo} onClose={()=>setPhoto(null)}/>}
     {showLogin&&data.auth&&<AdminLogin auth={data.auth} onClose={()=>setShowLogin(false)} onSuccess={loginAdmin}/>}
+    {splash&&data.players.length>0&&<Intro data={data} players={data.players} results={data.results} onDone={()=>setSplash(false)}/>}
   </div></ImageCtx.Provider></VideoCtx.Provider>;
 }
 
