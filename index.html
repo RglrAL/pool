@@ -125,10 +125,14 @@ const gist={
     if(!r.ok)throw new Error(`GitHub error ${r.status}`);
     return(await r.json()).id;
   },
-  async load(gistId,etag){
+  async load(gistId,etag,token){
     // Conditional request: a matching ETag returns 304 (empty, cheap, doesn't
     // count against GitHub's rate limit) so we can poll fast.
     const headers={};if(etag)headers["If-None-Match"]=etag;
+    // Authenticate reads when a token is available: lifts the caller from GitHub's
+    // anonymous 60-requests/hour-per-IP limit (which a shared WiFi blows through fast,
+    // returning 403) to the authenticated 5,000/hour limit.
+    if(token)headers["Authorization"]=`token ${token}`;
     // Cache-bust query param defeats any edge/CDN caching that could serve a stale
     // gist (the cause of laggy/glitchy updates); ETag still validated at origin → 304s stay free.
     const r=await fetch(`https://api.github.com/gists/${gistId}?_=${Date.now()}`,{cache:"no-store",headers});
@@ -182,10 +186,32 @@ function cldOpt(url){if(!url||!/res\.cloudinary\.com/.test(url))return url;if(/\
 // Derive a still-frame poster from a Cloudinary video when a player has no separate photo.
 function vidPoster(p){if(p?.image)return p.image;const v=p?.video||"";if(!/res\.cloudinary\.com\/[^/]+\/video\/upload\//.test(v))return undefined;return v.replace("/video/upload/","/video/upload/so_0/").replace(/\.[a-z0-9]+(\?.*)?$/i,".jpg")}
 
+/* ═══ ADMIN PASSWORD ═══ There's no server to hold a password, and GitHub needs the token to save.
+   So we keep the token encrypted-with-the-password inside the (public) gist: any device can log in with
+   just the password, but the raw token is never exposed. PBKDF2(SHA-256) → AES-GCM (Web Crypto). */
+const _enc=new TextEncoder(),_dec=new TextDecoder();
+const _b64=buf=>btoa(String.fromCharCode(...new Uint8Array(buf)));
+const _unb64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+async function _deriveKey(password,salt){
+  const base=await crypto.subtle.importKey("raw",_enc.encode(password),"PBKDF2",false,["deriveKey"]);
+  return crypto.subtle.deriveKey({name:"PBKDF2",salt,iterations:150000,hash:"SHA-256"},base,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
+}
+async function encryptToken(token,password){
+  const salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12));
+  const key=await _deriveKey(password,salt);
+  const ct=await crypto.subtle.encrypt({name:"AES-GCM",iv},key,_enc.encode(token));
+  return{v:1,salt:_b64(salt),iv:_b64(iv),ct:_b64(ct)};
+}
+async function decryptToken(auth,password){ // throws if the password is wrong (AES-GCM tag fails)
+  const key=await _deriveKey(password,_unb64(auth.salt));
+  const pt=await crypto.subtle.decrypt({name:"AES-GCM",iv:_unb64(auth.iv)},key,_unb64(auth.ct));
+  return _dec.decode(pt);
+}
+
 /* ═══ DATA DEFAULTS & HELPERS ═══ */
 // Bundled fallback background track; admin can override with any URL via Settings (data.music).
 const DEFAULT_MUSIC="/media/BBC%20Snooker%20Titles%202024.mp3";
-const DEF={tournamentName:"Pool Tournament 2026",days:5,players:[],results:{},schedule:{},dayDates:{},dayLabels:{},matchTimes:{},music:"",playoffs:{enabled:false,size:4,seeds:[],matches:{}}};
+const DEF={tournamentName:"Pool Tournament 2026",days:5,players:[],results:{},schedule:{},dayDates:{},dayLabels:{},matchTimes:{},music:"",auth:null,playoffs:{enabled:false,size:4,seeds:[],matches:{}}};
 
 function generateFixtures(players){
   // Sort by creation id so fixture ids stay stable no matter how the admin
@@ -501,6 +527,24 @@ function ImageModal({p,onClose}){
     <button onClick={onClose} style={{position:"fixed",top:16,right:16,width:48,height:48,borderRadius:"50%",border:"none",background:"rgba(255,255,255,0.14)",color:"#fff",fontSize:22,cursor:"pointer",backdropFilter:"blur(6px)"}}>✕</button></div></Portal>;
 }
 
+// Admin login: type the password → decrypt the stored token → you're admin on this device.
+function AdminLogin({auth,onClose,onSuccess}){
+  const[pw,setPw]=useState(""),[err,setErr]=useState(""),[busy,setBusy]=useState(false);
+  const go=async()=>{if(!pw||busy)return;setBusy(true);setErr("");
+    try{const tok=await decryptToken(auth,pw);onSuccess(tok);}catch(e){setErr("Wrong password — try again.");setBusy(false);}};
+  return<Portal><div onClick={onClose} style={{position:"fixed",inset:0,zIndex:5000,background:"rgba(2,6,15,0.9)",backdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,animation:"fadeIn .2s"}}>
+    <div onClick={e=>e.stopPropagation()} style={{...C,width:"100%",maxWidth:380,padding:24,animation:"rise .3s"}}>
+      <div style={{fontSize:40,textAlign:"center",marginBottom:8}}>🔒</div>
+      <h2 style={{...HS,fontSize:22,textAlign:"center",marginBottom:6}}>Admin Login</h2>
+      <p style={{fontSize:14,color:"#94A3B8",textAlign:"center",marginBottom:18,lineHeight:1.5}}>Enter the tournament password to manage results on this device.</p>
+      <input value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} type="password" autoFocus placeholder="Password"
+        style={{...inp,width:"100%",fontSize:16,padding:"14px 18px",marginBottom:12,textAlign:"center"}}/>
+      {err&&<div style={{color:"#EF4444",fontSize:14,textAlign:"center",marginBottom:12}}>{err}</div>}
+      <Btn onClick={go} disabled={!pw||busy}>{busy?"Unlocking…":"Log In 🔓"}</Btn>
+      <button onClick={onClose} style={{...btnS,width:"100%",marginTop:10,padding:"12px"}}>Cancel</button>
+    </div></div></Portal>;
+}
+
 // "Tale of the tape" — plays each player's intro in turn with an animated VS between them.
 function MatchupReel({p1,p2,onClose}){
   const steps=useMemo(()=>{const s=[];if(p1?.video)s.push({t:"clip",p:p1});if(p1?.video&&p2?.video)s.push({t:"vs"});if(p2?.video)s.push({t:"clip",p:p2});s.push({t:"end"});return s;},[p1,p2]);
@@ -605,17 +649,21 @@ function Setup({onReady}){
   const[mode,setMode]=useState(null);
   const[token,setToken]=useState("");
   const[gistId,setGistId]=useState("");
+  const[pw,setPw]=useState("");
   const[loading,setLoading]=useState(false);
   const[error,setError]=useState("");
 
   const createNew=async()=>{
     setLoading(true);setError("");
     try{
-      const id=await gist.create(token,DEF);
-      localStorage.setItem(TOKEN_KEY,token);
+      const tok=token.trim();
+      // Bake the password-encrypted token into the gist now, so every other device can log in with just the password.
+      const initial=pw.trim().length>=4?{...DEF,auth:await encryptToken(tok,pw.trim())}:DEF;
+      const id=await gist.create(tok,initial);
+      localStorage.setItem(TOKEN_KEY,tok);
       const url=`${location.origin}${location.pathname}?gist=${id}`;
       history.replaceState(null,"",url);
-      onReady(id,token);
+      onReady(id,tok);
     }catch(e){setError("Failed: "+e.message)}
     setLoading(false);
   };
@@ -626,11 +674,12 @@ function Setup({onReady}){
       let id=gistId.trim();
       if(id.includes("gist.github.com")){const parts=id.split("/");id=parts[parts.length-1]}
       if(id.includes("?gist=")){id=id.split("?gist=")[1].split("&")[0]}
-      await gist.load(id);
-      localStorage.setItem(TOKEN_KEY,token);
+      const tok=token.trim()||null;               // trim: pasted tokens often carry stray whitespace that breaks auth
+      await gist.load(id,null,tok);                // authenticate the check so a rate-limited (403) WiFi can still join as admin
+      if(tok)localStorage.setItem(TOKEN_KEY,tok);
       const url=`${location.origin}${location.pathname}?gist=${id}`;
       history.replaceState(null,"",url);
-      onReady(id,token||null);
+      onReady(id,tok);
     }catch(e){setError("Could not load: "+e.message)}
     setLoading(false);
   };
@@ -663,7 +712,11 @@ function Setup({onReady}){
         <div style={{fontSize:14,fontWeight:700,color:"#FBBF24",marginBottom:8}}>Step 2: Paste it here</div>
         <input value={token} onChange={e=>setToken(e.target.value)} placeholder="ghp_xxxxxxxxxxxx..." type="password"
           style={{...inp,width:"100%",fontSize:16,padding:"14px 18px",marginBottom:12}}/>
-        <Btn onClick={createNew} disabled={!token.trim()||loading}>{loading?"Creating...":"Create Tournament 🎱"}</Btn></div>
+        <div style={{fontSize:14,fontWeight:700,color:"#FBBF24",marginBottom:8}}>Step 3: Choose an admin password</div>
+        <p style={{fontSize:13,color:"#64748B",marginBottom:8,lineHeight:1.5}}>This is the <strong style={{color:"#94A3B8"}}>only</strong> thing you'll need to manage the tournament on your phone or any other device — no token or link required.</p>
+        <input value={pw} onChange={e=>setPw(e.target.value)} placeholder="e.g. a memorable phrase" type="password"
+          style={{...inp,width:"100%",fontSize:16,padding:"14px 18px",marginBottom:12}}/>
+        <Btn onClick={createNew} disabled={!token.trim()||pw.trim().length<4||loading}>{loading?"Creating...":"Create Tournament 🎱"}</Btn></div>
       {error&&<div style={{color:"#EF4444",marginTop:12,fontSize:14}}>{error}</div>}</div>}
 
     {mode==="join"&&<div style={{textAlign:"left"}}>
@@ -1056,6 +1109,11 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
   const[uploading,setUploading]=useState(null);const[repoInput,setRepoInput]=useState(data.mediaRepo||"");const[repoStatus,setRepoStatus]=useState("");
   const[cloud,setCloud]=useState({name:data.cloudName||"",preset:data.cloudPreset||""});
   const[music,setMusic]=useState(data.music||"");
+  const[pw,setPw]=useState("");const[pwMsg,setPwMsg]=useState("");
+  const savePassword=async()=>{const tk=localStorage.getItem(TOKEN_KEY);if(!tk){setPwMsg("No admin token on this device — can't set a password here.");return}
+    if(pw.trim().length<4){setPwMsg("Use at least 4 characters (a longer phrase is safer).");return}
+    setPwMsg("Saving…");try{const auth=await encryptToken(tk,pw.trim());save({...data,auth});setPw("");setPwMsg("✓ Password set — log in on any device with it.")}catch(e){setPwMsg("Failed: "+e.message)}};
+  const logoutAdmin=()=>{if(!confirm("Log out of admin on this device? You'll need the password to get back in."))return;localStorage.removeItem(TOKEN_KEY);location.reload()};
   const setField=(pid,field,val)=>save({...data,players:data.players.map(p=>p.id===pid?{...p,[field]:val}:p)});
   const handleVideo=async(pid,e)=>{const file=e.target.files[0];if(!file)return;e.target.value="";
     if(data.cloudName&&data.cloudPreset){setUploading({pid,kind:"video"});
@@ -1191,6 +1249,13 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
     </div>}
 
     {view==="settings"&&<div><h2 style={HS}>Settings</h2>
+      <div style={{...C,padding:20,marginBottom:14,border:"1px solid rgba(251,191,36,0.25)"}}><label style={{fontSize:14,color:"#FBBF24",fontWeight:700,display:"block",marginBottom:8}}>🔑 Admin Password</label>
+        <p style={{fontSize:13,color:"#64748B",marginBottom:10,lineHeight:1.5}}>Set a password so you can log in as admin on <strong style={{color:"#94A3B8"}}>any device</strong> — no GitHub token or link needed. Just open the tournament and tap the 🔒 in the header. Pick a real password: the data file is public, so weak passwords could be guessed.</p>
+        <input value={pw} onChange={e=>setPw(e.target.value)} type="password" placeholder={data.auth?"New password (replaces current)":"Choose a password"} style={{...inp,fontSize:16,padding:"13px 16px",width:"100%",marginBottom:10}}/>
+        <Btn onClick={savePassword} disabled={!pw.trim()}>{data.auth?"Update Password":"Set Password"}</Btn>
+        {pwMsg&&<div style={{fontSize:13,color:pwMsg.startsWith("✓")?"#22C55E":pwMsg==="Saving…"?"#94A3B8":"#EF4444",marginTop:10,fontWeight:600}}>{pwMsg}</div>}
+        {data.auth&&!pwMsg&&<div style={{fontSize:13,color:"#22C55E",marginTop:10,fontWeight:600}}>✓ Password is set for this tournament.</div>}
+        <button onClick={logoutAdmin} style={{...btnS,color:"#EF4444",background:"rgba(239,68,68,0.12)",marginTop:14,width:"100%",padding:"12px"}}>Log out of admin on this device</button></div>
       <div style={{...C,padding:20,marginBottom:14}}><label style={{fontSize:14,color:"#94A3B8",fontWeight:600,display:"block",marginBottom:8}}>Tournament Name</label>
         <input value={tn} onChange={e=>setTn(e.target.value)} style={{...inp,fontSize:17,padding:"14px 18px",width:"100%",marginBottom:10}}/><Btn onClick={()=>save({...data,tournamentName:tn})}>Save Name</Btn></div>
       <div style={{...C,padding:20,marginBottom:14}}><label style={{fontSize:14,color:"#94A3B8",fontWeight:600,display:"block",marginBottom:10}}>Header Logo</label>
@@ -1264,6 +1329,8 @@ function App(){
   const[reveal,setReveal]=useState(null);
   const[intro,setIntro]=useState(null);
   const[photo,setPhoto]=useState(null);
+  const[showLogin,setShowLogin]=useState(false);
+  const loginAdmin=tok=>{setToken(tok);localStorage.setItem(TOKEN_KEY,tok);setShowLogin(false);showToast("🔓 Logged in as admin")};
   const[sound,setSound]=useState(window.__poolSound);
   const toggleSound=()=>{const v=!window.__poolSound;window.__poolSound=v;localStorage.setItem("pool-sound",v?"1":"0");setSound(v);if(v){try{_actx().resume&&_actx().resume();playSound("win")}catch(e){}}};
   // ─── Background music: optional looping track (admin URL or bundled default), starts on tap, ducks under intros ───
@@ -1297,7 +1364,7 @@ function App(){
   const loadData=useCallback(async()=>{
     if(!gistId||savingRef.current)return;        // don't clobber an in-flight save
     try{
-      const res=await gist.load(gistId,etagRef.current);
+      const res=await gist.load(gistId,etagRef.current,token);  // token (if admin) → 5,000/hr instead of 60/hr
       if(res.notModified)return;                  // 304 — nothing changed, cheap
       etagRef.current=res.etag;
       const d=res.data;
@@ -1316,7 +1383,7 @@ function App(){
       if(leagueDoneRef.current===null){const tot=generateFixtures(d.players||[]).length;leagueDoneRef.current=tot>0&&Object.keys(d.results||{}).length>=tot;}
       setData({...DEF,...d});localRevRef.current=rev;setLastSync(Date.now());syncedRef.current=true;
     }catch(e){console.error("Load error:",e)}
-  },[gistId,showToast]);
+  },[gistId,token,showToast]);
 
   useEffect(()=>{if(ready&&gistId)loadData()},[ready,gistId,loadData]);
 
@@ -1366,7 +1433,8 @@ function App(){
     <div style={{padding:"20px 20px 14px",background:"linear-gradient(180deg,rgba(251,191,36,0.1) 0%,transparent 100%)",borderBottom:"1px solid rgba(255,255,255,0.06)",display:"flex",alignItems:"center",gap:10,position:"sticky",top:0,zIndex:40,backdropFilter:"blur(12px)"}}>
       {data.logo?<img src={data.logo} alt="" style={{width:40,height:40,objectFit:"contain",flexShrink:0}}/>:<span style={{fontSize:34}}>🎱</span>}<h1 style={{fontSize:28,fontWeight:400,color:"#FBBF24",fontFamily:"var(--hd)",letterSpacing:1.5,flex:1,lineHeight:1.05,textShadow:"0 2px 12px rgba(251,191,36,0.25)"}}>{data.tournamentName}</h1>
       <button className="press" onClick={toggleMusic} title={musicOn?"Music on":"Music off"} style={{background:"rgba(255,255,255,0.06)",border:"none",borderRadius:12,width:44,height:44,fontSize:20,cursor:"pointer",color:musicOn?"#FBBF24":"#475569",flexShrink:0}}>{musicOn?"🎵":"🎶"}</button>
-      <button className="press" onClick={toggleSound} title={sound?"Sound on":"Sound off"} style={{background:"rgba(255,255,255,0.06)",border:"none",borderRadius:12,width:44,height:44,fontSize:20,cursor:"pointer",color:sound?"#FBBF24":"#475569",flexShrink:0}}>{sound?"🔊":"🔇"}</button></div>
+      <button className="press" onClick={toggleSound} title={sound?"Sound on":"Sound off"} style={{background:"rgba(255,255,255,0.06)",border:"none",borderRadius:12,width:44,height:44,fontSize:20,cursor:"pointer",color:sound?"#FBBF24":"#475569",flexShrink:0}}>{sound?"🔊":"🔇"}</button>
+      {!isAdmin&&data.auth&&<button className="press" onClick={()=>setShowLogin(true)} title="Admin login" style={{background:"rgba(255,255,255,0.06)",border:"none",borderRadius:12,width:44,height:44,fontSize:20,cursor:"pointer",color:"#475569",flexShrink:0}}>🔒</button>}</div>
 
     <StatusBar lastSync={lastSync} saving={saving} isAdmin={isAdmin}/>
 
@@ -1389,6 +1457,7 @@ function App(){
     {reveal&&<ResultReveal reveal={reveal} onClose={()=>setReveal(null)}/>}
     {intro&&<VideoModal src={intro.video} poster={vidPoster(intro)} name={intro.name} onClose={()=>setIntro(null)}/>}
     {photo&&<ImageModal p={photo} onClose={()=>setPhoto(null)}/>}
+    {showLogin&&data.auth&&<AdminLogin auth={data.auth} onClose={()=>setShowLogin(false)} onSuccess={loginAdmin}/>}
   </div></ImageCtx.Provider></VideoCtx.Provider>;
 }
 
