@@ -1222,9 +1222,9 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
   const moveP=(id,dir)=>{const arr=[...data.players];const i=arr.findIndex(p=>p.id===id);const j=i+dir;if(j<0||j>=arr.length)return;[arr[i],arr[j]]=[arr[j],arr[i]];save({...data,players:arr})};
   const autoS=()=>{save({...data,schedule:smartSchedule(data.players,fixtures,data.days,data.legs)})};
   const setLegs=n=>{n=Math.max(1,Math.min(6,n||2));if(n===(data.legs||2))return;
-    const hasData=Object.keys(data.results||{}).length||Object.keys(data.schedule||{}).length;
-    if(hasData&&!confirm("Changing how many times pairs play rebuilds every fixture — this clears existing results and the schedule. Continue?"))return;
-    save({...data,legs:n,...(hasData?{results:{},schedule:{}}:{})});};
+    // Fixture ids are rebuilt, so the schedule is always regenerated; only warn if real results would be lost.
+    if(Object.keys(data.results||{}).length&&!confirm("Changing how many times pairs play rebuilds every fixture — this clears the recorded results. Continue?"))return;
+    save({...data,legs:n,results:{},schedule:{}});};
   const reveal=(wid,a,b)=>{if(!onResult)return;const lId=wid===a?b:a;onResult({winner:gp(wid),loser:gp(lId)})};
   const recRes=(fid,wid,f)=>{save({...data,results:{...data.results,[fid]:{winnerId:wid,p1Id:f.p1,p2Id:f.p2,ts:Date.now()}}});reveal(wid,f.p1,f.p2)};
   const clrRes=fid=>{const nr={...data.results};delete nr[fid];save({...data,results:nr})};
@@ -1362,10 +1362,15 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
       <div style={{...C,padding:20,marginBottom:14}}><label style={{fontSize:14,color:"#94A3B8",fontWeight:600,display:"block",marginBottom:8}}>Number of Days</label>
         <input type="number" min={1} max={14} value={data.days} onChange={e=>save({...data,days:parseInt(e.target.value)||1})} style={{...inp,fontSize:20,padding:"14px 18px",width:100,textAlign:"center"}}/></div>
       <div style={{...C,padding:20,marginBottom:14}}><label style={{fontSize:14,color:"#94A3B8",fontWeight:600,display:"block",marginBottom:8}}>Times each pair plays</label>
-        <p style={{fontSize:13,color:"#64748B",marginBottom:10,lineHeight:1.5}}>1 = single round-robin, 2 = home &amp; away (default), 3+ = more legs. Home/away alternates each leg.</p>
-        <div style={{display:"flex",gap:10,alignItems:"center"}}>
-          <input type="number" min={1} max={6} value={data.legs||2} onChange={e=>setLegs(parseInt(e.target.value))} style={{...inp,fontSize:20,padding:"14px 18px",width:100,textAlign:"center"}}/>
-          <span style={{fontSize:14,color:"#64748B"}}>{generateFixtures(data.players,data.legs).length} total matches</span></div></div>
+        <p style={{fontSize:13,color:"#64748B",marginBottom:14,lineHeight:1.5}}>1 = single round-robin, 2 = home &amp; away (default), 3+ = more legs. Home/away alternates each leg.</p>
+        <div style={{display:"flex",alignItems:"center",gap:16}}>
+          {(()=>{const L=data.legs||2;const step={width:48,height:48,borderRadius:14,border:"none",fontSize:26,fontWeight:800,cursor:"pointer",fontFamily:"var(--bd)",display:"flex",alignItems:"center",justifyContent:"center"};
+            return<>
+              <button onClick={()=>setLegs(L-1)} disabled={L<=1} style={{...step,background:L<=1?"rgba(255,255,255,0.05)":"rgba(255,255,255,0.1)",color:L<=1?"#475569":"#F8FAFC"}}>−</button>
+              <span style={{fontSize:34,fontWeight:900,color:"#FBBF24",fontFamily:"var(--hd)",minWidth:36,textAlign:"center"}}>{L}</span>
+              <button onClick={()=>setLegs(L+1)} disabled={L>=6} style={{...step,background:L>=6?"rgba(255,255,255,0.05)":"rgba(251,191,36,0.18)",color:L>=6?"#475569":"#FBBF24"}}>+</button>
+              <span style={{fontSize:14,color:"#64748B",marginLeft:6}}>{generateFixtures(data.players,L).length} matches total</span></>;})()}
+        </div></div>
       <div style={{...C,padding:20,border:"1px solid rgba(239,68,68,0.2)"}}><p style={{fontSize:15,color:"#94A3B8",marginBottom:14}}>Deletes everything.</p>
         <Btn onClick={()=>{if(confirm("Reset EVERYTHING?"))save(DEF)}} color="#EF4444" bg="rgba(239,68,68,0.15)">🗑️ Reset Tournament</Btn></div>
       <div style={{...C,padding:20,marginTop:14}}><p style={{fontSize:14,color:"#64748B",marginBottom:8}}>Disconnect admin from this device:</p>
