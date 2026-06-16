@@ -300,6 +300,22 @@ function getStats(players,results){
   return{byWins,byStreak:byStreak.streak>=2?byStreak:null};
 }
 
+// Live playoff-contention for a top-K league cut-off (e.g. the byes that earn an auto-semifinal):
+// who's mathematically guaranteed in ("clinched"), who can still get there ("live"), and who's out.
+// Points-only and deliberately safe — never claims a clinch/elimination that later results could overturn.
+function getContention(players,results,legs,K){
+  const t=getTable(players,results);const N=players.length;
+  const perPlayer=(N-1)*Math.max(1,legs||2);                 // total league games each player plays
+  const info=t.map(p=>{const remaining=Math.max(0,perPlayer-p.played);
+    return{id:p.id,cur:p.pts,max:p.pts+2*remaining,remaining};});
+  for(const x of info){
+    const guaranteedAbove=info.filter(y=>y.id!==x.id&&y.cur>x.max).length;  // already uncatchable by x → ahead for good
+    const canReachX=info.filter(y=>y.id!==x.id&&y.max>=x.cur).length;       // could still match or pass x
+    x.status=guaranteedAbove>=K?"out":(canReachX<K?"clinched":"live");
+  }
+  return info;
+}
+
 // Map of playerId -> rank change caused by the most recently played match.
 // Stateless: compares current standings to standings minus the latest result.
 function getRankDeltas(players,results){
@@ -453,7 +469,15 @@ function buildBracket(po){
       winnerOf[id]=win;cur.push({id,p1,p2,win})}
     rounds.push(cur)}
   const finalM=rounds[numRounds-1][0];
-  return{rounds,champion:winnerOf[finalM.id]??null};
+  // Optional 3rd-place playoff: the two beaten semifinalists meet for bronze.
+  let third=null;
+  if(po.thirdPlace&&numRounds>=2){
+    const sf=rounds[numRounds-2];                         // semifinals = exactly two matches
+    const loserOf=m=>{const w=winnerOf[m.id];return(w&&m.p1&&m.p2)?(w===m.p1?m.p2:m.p1):null;};
+    const id="third";
+    third={id,p1:loserOf(sf[0]),p2:loserOf(sf[1]),win:matches[id]?.winnerId??null};
+  }
+  return{rounds,champion:winnerOf[finalM.id]??null,third};
 }
 
 const PAL=["#E74C3C","#3498DB","#2ECC71","#9B59B6","#E67E22","#1ABC9C","#F39C12","#E91E63","#00BCD4","#FF7043"];
@@ -904,13 +928,47 @@ function LeagueRow({p,i,delta,ring,onTap,total}){
     <div style={{textAlign:"right"}}><div style={{fontSize:42,fontWeight:900,color:"#FBBF24",fontFamily:"var(--hd)",lineHeight:1}}>{p.pts}</div><div style={{fontSize:11,color:"#64748B",fontWeight:600,letterSpacing:1}}>PTS</div></div></div>;
 }
 
+// Live "race for the byes/playoffs" tracker — fills in as league games are played.
+function ContentionPanel({info,race,gp,onTap}){
+  const groups=[
+    {key:"clinched",label:race.kind==="bye"?"🔒 Bye secured":"🔒 Qualified",col:"#22C55E",bg:"rgba(34,197,94,0.13)"},
+    {key:"live",label:"🟢 Still in the race",col:"#FBBF24",bg:"rgba(251,191,36,0.13)"},
+    {key:"out",label:race.kind==="bye"?"⛔ Bye out of reach":"⛔ Out of the playoffs",col:"#94A3B8",bg:"rgba(148,163,184,0.1)"},
+  ];
+  return<div style={{...C,padding:"16px 18px",marginBottom:18,border:"1px solid rgba(251,191,36,0.22)"}}>
+    <div style={{fontSize:18,fontWeight:400,color:"#F8FAFC",fontFamily:"var(--hd)",letterSpacing:1.5}}>{race.title}</div>
+    <div style={{fontSize:13,color:"#94A3B8",marginTop:3,marginBottom:14,lineHeight:1.45}}>{race.sub}</div>
+    {groups.map(g=>{const list=info.filter(x=>x.status===g.key);if(!list.length)return null;
+      return<div key={g.key} style={{marginBottom:11}}>
+        <div style={{fontSize:12,fontWeight:800,color:g.col,letterSpacing:0.5,marginBottom:8,textTransform:"uppercase"}}>{g.label}</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+          {list.map(x=>{const p=gp(x.id);return<div key={x.id} onClick={()=>p&&onTap(p)} style={{display:"flex",alignItems:"center",gap:7,background:g.bg,borderRadius:22,padding:"4px 12px 4px 4px",cursor:"pointer"}}>
+            <Av p={p} size={30} noTap/>
+            <span style={{fontSize:13,fontWeight:700,color:"#E2E8F0"}}>{p?.name}</span>
+            <span style={{fontSize:11,color:g.col,fontWeight:800,fontFamily:"var(--hd)",letterSpacing:0.5}}>{x.cur}{g.key!=="out"&&x.remaining>0?`–${x.max}`:""} PTS</span>
+          </div>;})}</div></div>;})}
+  </div>;
+}
+
 function TableScreen({players,results,onTap,data}){const table=getTable(players,results);if(!players.length)return<Empty i="🏆" t="No players yet."/>;
   const podium=table.filter(p=>p.played>0).length>=3?table.slice(0,3):null;const rest=podium?table.slice(3):table;
   const deltas=getRankDeltas(players,results);
+  // Race tracker: only while playoffs are configured and the league is still running.
+  const po=data.playoffs;const N=players.length;const gp=id=>players.find(p=>p.id===id);
+  const totalGames=generateFixtures(players,data.legs).length;const playedN=Object.keys(results).length;
+  const leagueDone=totalGames>0&&playedN>=totalGames;
+  let race=null,cinfo=null;
+  if(po?.enabled&&playedN>0&&!leagueDone){
+    const seedN=(po.seeds?.length)||N;const byes=Math.max(0,po.size-seedN);
+    if(po.size>=4&&byes>0&&byes<N)race={K:byes,kind:"bye",title:`Race for the ${byes===1?"bye":byes+" byes"}`,sub:`Top ${byes} earn a first-round bye → straight to the ${roundName(po.size/4)}.`};
+    else if(po.size<N)race={K:po.size,kind:"qualify",title:"Race for the playoffs",sub:`Top ${po.size} qualify for the knockout bracket.`};
+    if(race)cinfo=getContention(players,results,data.legs,race.K);
+  }
   return<div>
     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
       <h2 style={{...HS,marginBottom:0}}>LEAGUE TABLE</h2>
       <ShareBtn data={data} results={results} opts={{mode:"standings"}}/></div>
+    {race&&cinfo&&<ContentionPanel info={cinfo} race={race} gp={gp} onTap={onTap}/>}
     {podium&&<Podium top={table.slice(0,3)} onTap={onTap} deltas={deltas}/>}
     <div className="stagger">{rest.map(p=>{const i=table.indexOf(p);const ring=i===0?"gold":i===1?"silver":i===2?"bronze":undefined;
       return<LeagueRow key={p.id} p={p} i={i} delta={deltas[p.id]} ring={ring} onTap={onTap} total={table.length}/>;})}</div></div>;}
@@ -1007,7 +1065,7 @@ function BracketList({rounds,gp,onTap,seedOf}){const last=rounds.length-1;const 
       <span style={{fontSize:26}}>🏆</span><Av p={champP} size={64} ring="gold"/><div style={{flex:1,minWidth:0}}><div style={{fontSize:12,color:"#FBBF24",fontWeight:800,letterSpacing:1.5,fontFamily:"var(--hd)"}}>CHAMPION</div><div style={{fontSize:20,fontWeight:800,color:"#F8FAFC",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{champP.name}</div></div></div>}
   </div>;}
 
-function BracketScreen({data,gp,onTap}){const po=data.playoffs;const{rounds,champion}=buildBracket(po);
+function BracketScreen({data,gp,onTap}){const po=data.playoffs;const{rounds,champion,third}=buildBracket(po);
   const seedOf=id=>{const idx=(po.seeds||[]).indexOf(id);return idx>=0?idx+1:null};
   const[layout,setLayout]=useState("bracket");
   const champRef=useRef(false);
@@ -1025,7 +1083,10 @@ function BracketScreen({data,gp,onTap}){const po=data.playoffs;const{rounds,cham
       <div style={{fontSize:34,fontWeight:900,color:"#F8FAFC",marginTop:14,fontFamily:"var(--hd)",letterSpacing:1}}>{champ.name}</div>
       <div style={{fontSize:14,color:"#94A3B8",marginTop:6,marginBottom:16,fontWeight:500}}>Tap to celebrate again 🎉</div>
       <div onClick={e=>e.stopPropagation()} style={{display:"flex",justifyContent:"center"}}><ShareBtn data={data} results={data.results} opts={{mode:"champion",player:champ}} label="📸 Share Champion"/></div></div>}
-    {layout==="bracket"?<BracketView rounds={rounds} gp={gp} onTap={onTap} seedOf={seedOf}/>:<BracketList rounds={rounds} gp={gp} onTap={onTap} seedOf={seedOf}/>}</div>;}
+    {layout==="bracket"?<BracketView rounds={rounds} gp={gp} onTap={onTap} seedOf={seedOf}/>:<BracketList rounds={rounds} gp={gp} onTap={onTap} seedOf={seedOf}/>}
+    {third&&(third.p1||third.p2)&&<div style={{marginTop:22}}>
+      <div style={{fontSize:15,fontWeight:800,color:"#CD7F32",fontFamily:"var(--hd)",letterSpacing:2,textTransform:"uppercase",marginBottom:10}}>🥉 3rd Place Playoff</div>
+      <div style={{height:108,maxWidth:360}}><BracketCell m={third} gp={gp} onTap={onTap} seedOf={seedOf}/></div></div>}</div>;}
 
 // Mini line chart of a player's league position after each of their matches (rank 1 = top).
 function Timeline({player,players,results}){
@@ -1314,7 +1375,11 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
               <button disabled={N<2} onClick={seedAll} style={sb(hasByes&&seedN===N,N<2)}>All {N>1?`(${N})`:""}</button></div>;})()}
           <Btn onClick={()=>setPo({seeds:getTable(data.players,data.results).slice(0,po.size).map(p=>p.id)})} disabled={data.players.length<2}>🌱 Re-seed from current standings</Btn>
           {(po.seeds||[]).length<po.size&&(po.seeds||[]).length>0&&<div style={{marginTop:10,fontSize:13,color:"#FBBF24",fontWeight:600}}>Top {po.size-(po.seeds||[]).length} seed{po.size-(po.seeds||[]).length!==1?"s":""} get a first-round bye.</div>}
-          {(po.seeds||[]).length>0&&<div style={{marginTop:12,fontSize:13,color:"#64748B",lineHeight:1.6}}>Seeds: {(po.seeds||[]).map((id,i)=>`${i+1}. ${gp(id)?.name||"?"}`).join("   ·   ")}</div>}</>}</div>
+          {(po.seeds||[]).length>0&&<div style={{marginTop:12,fontSize:13,color:"#64748B",lineHeight:1.6}}>Seeds: {(po.seeds||[]).map((id,i)=>`${i+1}. ${gp(id)?.name||"?"}`).join("   ·   ")}</div>}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:16,paddingTop:16,borderTop:"1px solid rgba(255,255,255,0.08)"}}>
+            <div><div style={{fontSize:15,fontWeight:700,color:"#F8FAFC"}}>3rd/4th place playoff</div><div style={{fontSize:12,color:"#64748B",marginTop:2}}>Beaten semifinalists play for bronze 🥉</div></div>
+            <button onClick={()=>setPo({thirdPlace:!po.thirdPlace})} style={{width:56,height:32,borderRadius:16,border:"none",cursor:"pointer",background:po.thirdPlace?"#22C55E":"rgba(255,255,255,0.12)",position:"relative",flexShrink:0}}>
+              <span style={{position:"absolute",top:3,left:po.thirdPlace?27:3,width:26,height:26,borderRadius:"50%",background:"#fff",transition:"left 0.2s"}}/></button></div></>}</div>
       {po.enabled&&(po.seeds||[]).length>0&&buildBracket(po).rounds.map((rd,ri)=><div key={ri} style={{marginBottom:18}}>
         <div style={{fontSize:15,fontWeight:800,color:"#94A3B8",fontFamily:"var(--hd)",letterSpacing:2,textTransform:"uppercase",marginBottom:10}}>{roundName(rd.length)}</div>
         {rd.map(m=>m.bye
@@ -1322,6 +1387,12 @@ function AdminScreen({data,save,isAdmin,gistId,onResult}){
           : (m.p1&&m.p2)
           ? <ResEntry key={m.id} f={{p1:m.p1,p2:m.p2}} p1={gp(m.p1)} p2={gp(m.p2)} result={po.matches?.[m.id]} onRec={w=>recPo(m.id,w,m)} onClr={()=>clrPo(m.id)}/>
           : <div key={m.id} style={{...C,marginBottom:10,padding:"16px 18px",opacity:.5,fontSize:15,color:"#64748B"}}>Awaiting previous round…</div>)}</div>)}
+      {po.enabled&&po.thirdPlace&&(po.seeds||[]).length>0&&(()=>{const third=buildBracket(po).third;if(!third)return null;return<div style={{marginBottom:18}}>
+        <div style={{fontSize:15,fontWeight:800,color:"#CD7F32",fontFamily:"var(--hd)",letterSpacing:2,textTransform:"uppercase",marginBottom:10}}>🥉 3rd Place Playoff</div>
+        {third.p1&&third.p2
+          ? <ResEntry f={{p1:third.p1,p2:third.p2}} p1={gp(third.p1)} p2={gp(third.p2)} result={po.matches?.[third.id]} onRec={w=>recPo(third.id,w,third)} onClr={()=>clrPo(third.id)}/>
+          : <div style={{...C,marginBottom:10,padding:"16px 18px",opacity:.5,fontSize:15,color:"#64748B"}}>Awaiting semifinal results…</div>}
+      </div>;})()}
     </div>}
 
     {view==="settings"&&<div><h2 style={HS}>Settings</h2>
