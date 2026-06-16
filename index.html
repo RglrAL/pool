@@ -54,6 +54,7 @@ button:active{transform:scale(.94)}
 #root{max-width:680px;margin:0 auto;min-height:100vh;position:relative}
 @keyframes sweep{0%{transform:translateX(-120%) skewX(-18deg);opacity:0}30%{opacity:.9}100%{transform:translateX(220%) skewX(-18deg);opacity:0}}
 @keyframes kenburns{0%{transform:scale(1.18)}100%{transform:scale(1.32)}}
+@keyframes kbTop{0%{transform:scale(1.04)}100%{transform:scale(1.12)}}
 @keyframes introName{0%{transform:translateY(28px);opacity:0;letter-spacing:0}100%{transform:translateY(0);opacity:1;letter-spacing:2px}}
 @media (prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}}
 </style>
@@ -657,7 +658,7 @@ function Intro({data,players,results,onDone}){
     </div>}
     {step.t==="player"&&(()=>{const p=step.p,r=posOf(p),poster=vidPoster(p);return<div key={p.id} style={{position:"absolute",inset:0,animation:"fadeIn .55s ease both"}}>
       {p.video
-        ?<video key={p.id} src={p.video} poster={poster} autoPlay muted playsInline style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",animation:"kenburns 1.9s linear both"}}/>
+        ?<video key={p.id} src={p.video} poster={poster} autoPlay muted playsInline style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",objectPosition:"center top",transformOrigin:"center top",animation:"kbTop 1.9s linear both"}}/>
         :poster?<div style={{position:"absolute",inset:0,backgroundImage:`url(${poster})`,backgroundSize:"cover",backgroundPosition:"center",animation:"kenburns 1.9s linear both"}}/>
         :<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}}><Av p={p} size={200} ring="gold" noTap/></div>}
       <div style={{position:"absolute",inset:0,background:"linear-gradient(180deg,rgba(6,8,15,0.45) 0%,transparent 28%,transparent 52%,rgba(6,8,15,0.94) 100%)"}}/>
