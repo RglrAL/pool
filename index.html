@@ -906,24 +906,34 @@ function Home({data,players,results,fixtures,gp,onNav,onTap}){
   </div>;
 }
 
-function Podium({top,onTap,deltas={}}){const order=[top[1],top[0],top[2]].filter(Boolean);const rings={0:"gold",1:"silver",2:"bronze"};const sizes={0:122,1:94,2:94};
+// Compact inline status badge for the league table — mirrors the contention panel's three states.
+function ContentionPill({status,kind}){
+  const m={clinched:{t:kind==="bye"?"🔒 Bye":"🔒 In",c:"#22C55E",bg:"rgba(34,197,94,0.15)"},
+    live:{t:"🟡 In race",c:"#FBBF24",bg:"rgba(251,191,36,0.15)"},
+    out:{t:kind==="bye"?"⛔ No bye":"⛔ Out",c:"#94A3B8",bg:"rgba(148,163,184,0.13)"}}[status];
+  if(!m)return null;
+  return<span style={{display:"inline-flex",alignItems:"center",fontSize:12,fontWeight:800,background:m.bg,color:m.c,padding:"3px 10px",borderRadius:20,whiteSpace:"nowrap"}}>{m.t}</span>;
+}
+
+function Podium({top,onTap,deltas={},contention={},ckind}){const order=[top[1],top[0],top[2]].filter(Boolean);const rings={0:"gold",1:"silver",2:"bronze"};const sizes={0:122,1:94,2:94};
   return<div style={{display:"flex",alignItems:"flex-end",justifyContent:"center",gap:14,marginBottom:24,padding:"8px 0 4px"}}>
     {order.map(p=>{const rank=top.indexOf(p);const sz=sizes[rank];
       return<div key={p.id} className="press" onClick={()=>onTap(p)} style={{textAlign:"center",cursor:"pointer",flex:"0 0 auto",animation:"popIn 0.4s"}}>
         <div style={{fontSize:rank===0?34:24,marginBottom:4}}>{rank===0?"🥇":rank===1?"🥈":"🥉"}</div>
         <div style={{display:"flex",justifyContent:"center"}}><Flip trigger={rank}><Av p={p} size={sz} ring={rings[rank]}/></Flip></div>
         <div style={{fontSize:rank===0?19:16,fontWeight:700,color:"#F8FAFC",marginTop:10,maxWidth:sz,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6}}><div style={{fontSize:rank===0?34:26,fontWeight:900,color:"#FBBF24",fontFamily:"var(--hd)",lineHeight:1.1}}>{p.pts}<span style={{fontSize:11,color:"#64748B",marginLeft:3}}>PTS</span></div><RankDelta delta={deltas[p.id]} size={11}/></div></div>;})}</div>;}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6}}><div style={{fontSize:rank===0?34:26,fontWeight:900,color:"#FBBF24",fontFamily:"var(--hd)",lineHeight:1.1}}>{p.pts}<span style={{fontSize:11,color:"#64748B",marginLeft:3}}>PTS</span></div><RankDelta delta={deltas[p.id]} size={11}/></div>
+        {contention[p.id]&&<div style={{marginTop:7,display:"flex",justifyContent:"center"}}><ContentionPill status={contention[p.id]} kind={ckind}/></div>}</div>;})}</div>;}
 
 // League table row that flips its avatar + flashes when the player's rank changes live.
-function LeagueRow({p,i,delta,ring,onTap,total}){
+function LeagueRow({p,i,delta,ring,onTap,total,cstatus,ckind}){
   const[moved,setMoved]=useState(false);const prev=useRef(i);
   useEffect(()=>{if(prev.current!==i){setMoved(true);prev.current=i;const t=setTimeout(()=>setMoved(false),900);return()=>clearTimeout(t)}},[i]);
   return<div className="press" onClick={()=>onTap(p)} style={{...C,display:"flex",alignItems:"center",gap:14,padding:"14px 16px",marginBottom:10,cursor:"pointer",borderLeft:`4px solid ${i===0?"#FBBF24":i<3?"#64748B":"transparent"}`,animation:moved?"rankPulse .9s ease":undefined}}>
     <div style={{width:34,textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}><span style={{fontSize:24,fontWeight:900,fontFamily:"var(--hd)",color:i<3?"#CBD5E1":"#475569"}}>{i+1}</span><RankDelta delta={delta} size={11}/></div>
     <Flip trigger={i}><Av p={p} size={92} ring={ring} vid/></Flip>
     <div style={{flex:1,minWidth:0}}><div style={{fontSize:20,fontWeight:700,color:"#F8FAFC",marginBottom:5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div>
-      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:5}}>{i===0&&p.played>0&&<Badge type="leader"/>}{p.cs>=3&&p.st==="W"&&<Badge type="streak"/>}{i===total-1&&total>2&&p.played>0&&<Badge type="spoon"/>}</div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:5}}>{i===0&&p.played>0&&<Badge type="leader"/>}{p.cs>=3&&p.st==="W"&&<Badge type="streak"/>}{i===total-1&&total>2&&p.played>0&&<Badge type="spoon"/>}<ContentionPill status={cstatus} kind={ckind}/></div>
       <div style={{fontSize:14,color:"#94A3B8",fontWeight:500}}>Played {p.played} · Won {p.wins} · Lost {p.losses}</div><Dots form={p.form} size={11}/></div>
     <div style={{textAlign:"right"}}><div style={{fontSize:42,fontWeight:900,color:"#FBBF24",fontFamily:"var(--hd)",lineHeight:1}}>{p.pts}</div><div style={{fontSize:11,color:"#64748B",fontWeight:600,letterSpacing:1}}>PTS</div></div></div>;
 }
@@ -964,14 +974,15 @@ function TableScreen({players,results,onTap,data}){const table=getTable(players,
     else if(po.size<N)race={K:po.size,kind:"qualify",title:"Race for the playoffs",sub:`Top ${po.size} qualify for the knockout bracket.`};
     if(race)cinfo=getContention(players,results,data.legs,race.K);
   }
+  const cstat={};if(cinfo)for(const x of cinfo)cstat[x.id]=x.status;
   return<div>
     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
       <h2 style={{...HS,marginBottom:0}}>LEAGUE TABLE</h2>
       <ShareBtn data={data} results={results} opts={{mode:"standings"}}/></div>
     {race&&cinfo&&<ContentionPanel info={cinfo} race={race} gp={gp} onTap={onTap}/>}
-    {podium&&<Podium top={table.slice(0,3)} onTap={onTap} deltas={deltas}/>}
+    {podium&&<Podium top={table.slice(0,3)} onTap={onTap} deltas={deltas} contention={cstat} ckind={race?.kind}/>}
     <div className="stagger">{rest.map(p=>{const i=table.indexOf(p);const ring=i===0?"gold":i===1?"silver":i===2?"bronze":undefined;
-      return<LeagueRow key={p.id} p={p} i={i} delta={deltas[p.id]} ring={ring} onTap={onTap} total={table.length}/>;})}</div></div>;}
+      return<LeagueRow key={p.id} p={p} i={i} delta={deltas[p.id]} ring={ring} onTap={onTap} total={table.length} cstatus={cstat[p.id]} ckind={race?.kind}/>;})}</div></div>;}
 
 function FixtureCard({f,data,gp,results,onTap}){
   const p1=gp(f.p1),p2=gp(f.p2),r=results[f.id],time=data.matchTimes?.[f.id];const w1=r?.winnerId===p1?.id,w2=r?.winnerId===p2?.id;
