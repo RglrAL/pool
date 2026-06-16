@@ -251,7 +251,7 @@ function smartSchedule(players,fixtures,numDays,legs=2){
   const sched={};const used=new Set();const rpd=Math.ceil(all.length/numDays);
   for(let d=0;d<numDays;d++){sched[d]=[];
     for(let r=d*rpd;r<Math.min((d+1)*rpd,all.length);r++)
-      for(const[p1,p2]of all[r]){const fx=fixtures.find(f=>f.p1===p1&&f.p2===p2&&!used.has(f.id));
+      for(const[p1,p2]of all[r]){const fx=fixtures.find(f=>((f.p1===p1&&f.p2===p2)||(f.p1===p2&&f.p2===p1))&&!used.has(f.id));
         if(fx){used.add(fx.id);sched[d].push(fx.id)}}}
   return sched;
 }
